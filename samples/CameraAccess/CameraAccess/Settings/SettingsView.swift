@@ -143,8 +143,11 @@ struct SettingsView: View {
           NavigationLink("YandexGPT") {
             YandexGPTSettingsView()
           }
+          NavigationLink("Local Model (FastVLM)") {
+            LocalMLXSettingsView()
+          }
         } footer: {
-          Text("Configure GigaChat (Sber) or YandexGPT (Yandex Cloud). Selecting either as the active engine is added separately, once the \"ask\" screen lands.")
+          Text("Configure GigaChat (Sber), YandexGPT (Yandex Cloud), or the on-device FastVLM model. Selecting one as the active engine is added separately, once the \"ask\" screen lands.")
         }
 
         Section {

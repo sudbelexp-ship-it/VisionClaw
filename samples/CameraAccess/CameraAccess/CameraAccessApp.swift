@@ -34,6 +34,12 @@ struct CameraAccessApp: App {
   private let wearables: WearablesInterface?
 
   init() {
+    // Move the FastVLM model store OUT of Caches before anything touches the HuggingFace hub —
+    // iOS may purge Caches under storage pressure, which would silently delete downloaded model
+    // weights (the app would then re-download a GB+ at connect time). Must run before any
+    // HubClient exists.
+    FastVLMService.bootstrapModelStore()
+
     var available: WearablesInterface?
     do {
       try Wearables.configure()

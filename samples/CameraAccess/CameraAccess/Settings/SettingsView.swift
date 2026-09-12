@@ -137,6 +137,14 @@ struct SettingsView: View {
         }
 
         Section {
+          NavigationLink("GigaChat") {
+            GigaChatSettingsView()
+          }
+        } footer: {
+          Text("Configure the GigaChat (Sber) backend. Selecting it as the active engine is added separately, once its \"ask\" screen lands.")
+        }
+
+        Section {
           Button("Reset to Defaults") {
             showResetConfirmation = true
           }

@@ -67,6 +67,10 @@ final class SettingsManager {
     case speakerOutputEnabled
     case videoStreamingEnabled
     case proactiveNotificationsEnabled
+    case gigaChatAuthKey
+    case gigaChatVisionModel
+    case gigaChatTextModel
+    case gigaChatSystemPrompt
   }
 
   private init() {}
@@ -192,6 +196,28 @@ final class SettingsManager {
     set { defaults.set(newValue, forKey: Key.proactiveNotificationsEnabled.rawValue) }
   }
 
+  // MARK: - GigaChat (Sber)
+
+  var gigaChatAuthKey: String {
+    get { defaults.string(forKey: Key.gigaChatAuthKey.rawValue) ?? "" }
+    set { defaults.set(newValue, forKey: Key.gigaChatAuthKey.rawValue) }
+  }
+
+  var gigaChatVisionModel: String {
+    get { defaults.string(forKey: Key.gigaChatVisionModel.rawValue) ?? "GigaChat-2-Max" }
+    set { defaults.set(newValue, forKey: Key.gigaChatVisionModel.rawValue) }
+  }
+
+  var gigaChatTextModel: String {
+    get { defaults.string(forKey: Key.gigaChatTextModel.rawValue) ?? "GigaChat-2-Pro" }
+    set { defaults.set(newValue, forKey: Key.gigaChatTextModel.rawValue) }
+  }
+
+  var gigaChatSystemPrompt: String {
+    get { defaults.string(forKey: Key.gigaChatSystemPrompt.rawValue) ?? "" }
+    set { defaults.set(newValue, forKey: Key.gigaChatSystemPrompt.rawValue) }
+  }
+
   // MARK: - Reset
 
   func resetAll() {
@@ -199,7 +225,8 @@ final class SettingsManager {
                 .openClawHookToken, .openClawGatewayToken, .cloudGatewayURL, .cloudGatewayToken,
                 .accountEmail, .accountStatus,
                 .speakerOutputEnabled, .videoStreamingEnabled,
-                .proactiveNotificationsEnabled] {
+                .proactiveNotificationsEnabled,
+                .gigaChatAuthKey, .gigaChatVisionModel, .gigaChatTextModel, .gigaChatSystemPrompt] {
       defaults.removeObject(forKey: key.rawValue)
     }
   }

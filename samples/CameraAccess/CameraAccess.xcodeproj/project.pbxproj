@@ -47,6 +47,14 @@
 		37854B66A92A0817795FABB2 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = DB0BA11AA02189AAB4B0B69B /* MLX */; };
 		22504987DB653118519E6A0F /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = 6179DBB4065CADB966E87F63 /* HuggingFace */; };
 		87E82F7D747B87A70009CC1C /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 3B36B05AB1899B9677DEA491 /* Tokenizers */; };
+		7462C097711F28EE90457EA9 /* GigaChatConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8B94DD7DD321C989CD70FA /* GigaChatConstants.swift */; };
+		1DD4278EC7CDCCB6DC78050F /* GigaChatTrustDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0B6F65EF3BCB7B677FEF9E /* GigaChatTrustDelegate.swift */; };
+		EDA0E1B786B7C78C650B740A /* GigaChatAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2E907EF7D6FF038DD7DDB7F /* GigaChatAuth.swift */; };
+		F6333AAFC1AD35924AADB016 /* GigaChatClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7662A9450354A6B9E7AE4C61 /* GigaChatClient.swift */; };
+		EF1F65969A477C67301427D6 /* GigaChatService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 186A75007A13A6FE2FA66687 /* GigaChatService.swift */; };
+		D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */; };
+		5D7F2712092B574D9E4B558B /* russian_trusted_root_ca.pem in Resources */ = {isa = PBXBuildFile; fileRef = C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */; };
+		7BD8E345221C6F8C5C56D065 /* russian_trusted_sub_ca.pem in Resources */ = {isa = PBXBuildFile; fileRef = 16A40FCD42975A940F93BD26 /* russian_trusted_sub_ca.pem */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -108,6 +116,14 @@
 		E6DA45182E79A63100E3F688 /* MockDeviceCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockDeviceCardView.swift; sourceTree = "<group>"; };
 		E6DA451A2E79A63100E3F688 /* MockDeviceKitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockDeviceKitView.swift; sourceTree = "<group>"; };
 		E6FD3BCD2EB4D53A00E7FE5D /* NonStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NonStreamView.swift; sourceTree = "<group>"; };
+		FC8B94DD7DD321C989CD70FA /* GigaChatConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatConstants.swift; sourceTree = "<group>"; };
+		8A0B6F65EF3BCB7B677FEF9E /* GigaChatTrustDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatTrustDelegate.swift; sourceTree = "<group>"; };
+		D2E907EF7D6FF038DD7DDB7F /* GigaChatAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatAuth.swift; sourceTree = "<group>"; };
+		7662A9450354A6B9E7AE4C61 /* GigaChatClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatClient.swift; sourceTree = "<group>"; };
+		186A75007A13A6FE2FA66687 /* GigaChatService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatService.swift; sourceTree = "<group>"; };
+		28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatSettingsView.swift; sourceTree = "<group>"; };
+		C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */ = {isa = PBXFileReference; lastKnownFileType = text; path = russian_trusted_root_ca.pem; sourceTree = "<group>"; };
+		16A40FCD42975A940F93BD26 /* russian_trusted_sub_ca.pem */ = {isa = PBXFileReference; lastKnownFileType = text; path = russian_trusted_sub_ca.pem; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -141,6 +157,7 @@
 			isa = PBXGroup;
 			children = (
 				8FD96B7D2E6F0A9800F56AB1 /* CameraAccess */,
+				F82D8CACC9D0DAD3791C5A75 /* certs */,
 				8F2A14F12DDBCEB900D4E5F2 /* Frameworks */,
 				7A7A7A7A7A7A7A7A7A7A7A7A /* Products */,
 				E699CC962E8150670052C240 /* CameraAccessTests */,
@@ -199,6 +216,7 @@
 				9DD6CAAD2F3C426600ED7098 /* Secrets.swift */,
 				9DD6CAAE2F3C426600ED7098 /* Secrets.swift.example */,
 				9D3C69602F367CF700E641A5 /* iPhone */,
+				98B9DFA46A67B2FD07050823 /* GigaChat */,
 				A1B2C3D42F0A000300000001 /* Gemini */,
 				8FD96B702E6F0A9800F56AB1 /* ViewModels */,
 				8FD96B762E6F0A9800F56AB1 /* Views */,
@@ -239,8 +257,30 @@
 				9DD894B02F4047630090B9B9 /* SettingsView.swift */,
 				9DD894C32F4047630090B9C3 /* ConnectedAppsView.swift */,
 				9DD894C12F4047630090B9C1 /* RecentTasksView.swift */,
+				28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */,
 			);
 			path = Settings;
+			sourceTree = "<group>";
+		};
+		98B9DFA46A67B2FD07050823 /* GigaChat */ = {
+			isa = PBXGroup;
+			children = (
+				FC8B94DD7DD321C989CD70FA /* GigaChatConstants.swift */,
+				8A0B6F65EF3BCB7B677FEF9E /* GigaChatTrustDelegate.swift */,
+				D2E907EF7D6FF038DD7DDB7F /* GigaChatAuth.swift */,
+				7662A9450354A6B9E7AE4C61 /* GigaChatClient.swift */,
+				186A75007A13A6FE2FA66687 /* GigaChatService.swift */,
+			);
+			path = GigaChat;
+			sourceTree = "<group>";
+		};
+		F82D8CACC9D0DAD3791C5A75 /* certs */ = {
+			isa = PBXGroup;
+			children = (
+				C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */,
+				16A40FCD42975A940F93BD26 /* russian_trusted_sub_ca.pem */,
+			);
+			path = certs;
 			sourceTree = "<group>";
 		};
 		A1B2C3D42F0A000300000001 /* Gemini */ = {
@@ -359,6 +399,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				8FD96B8D2E6F0A9800F56AB1 /* Assets.xcassets in Resources */,
+				5D7F2712092B574D9E4B558B /* russian_trusted_root_ca.pem in Resources */,
+				7BD8E345221C6F8C5C56D065 /* russian_trusted_sub_ca.pem in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -405,6 +447,12 @@
 				9DD894B32F4047630090B9B9 /* SettingsView.swift in Sources */,
 				9DD894C42F4047630090B9C4 /* ConnectedAppsView.swift in Sources */,
 				9DD894C22F4047630090B9C2 /* RecentTasksView.swift in Sources */,
+				7462C097711F28EE90457EA9 /* GigaChatConstants.swift in Sources */,
+				1DD4278EC7CDCCB6DC78050F /* GigaChatTrustDelegate.swift in Sources */,
+				EDA0E1B786B7C78C650B740A /* GigaChatAuth.swift in Sources */,
+				F6333AAFC1AD35924AADB016 /* GigaChatClient.swift in Sources */,
+				EF1F65969A477C67301427D6 /* GigaChatService.swift in Sources */,
+				D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

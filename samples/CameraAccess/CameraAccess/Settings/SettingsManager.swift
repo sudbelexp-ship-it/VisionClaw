@@ -10,13 +10,18 @@ enum AgentBackend: String, CaseIterable {
 }
 
 
-/// Which realtime model answers. The choice travels to the agent worker as
-/// room-token metadata; the phone never talks to either provider directly.
-// OpenAI is the default engine. The picker renders allCases in declaration
-// order, so listing it first also makes it the left-hand segment.
+/// Which model answers. `.openai`/`.gemini` travel to the agent worker as room-token metadata
+/// (the phone never talks to either provider directly — see LiveKitSession). `.gigachat`,
+/// `.yandexgpt`, and `.localMLX` are DIRECT backends (see DirectAIBackend.swift): selecting one
+/// bypasses LiveKit/the agent/the gateway entirely, and StreamSessionView shows AskAssistantView
+/// instead of the call screen.
+// OpenAI is the default engine. The picker renders allCases in declaration order.
 enum IntelligenceEngine: String, CaseIterable {
   case openai = "openai"
   case gemini = "gemini"
+  case gigachat = "gigachat"
+  case yandexgpt = "yandexgpt"
+  case localMLX = "localMLX"
 
   static let defaultsKey = "intelligenceEngine"
 
@@ -24,6 +29,18 @@ enum IntelligenceEngine: String, CaseIterable {
     switch self {
     case .openai: return "OpenAI"
     case .gemini: return "Gemini"
+    case .gigachat: return "GigaChat"
+    case .yandexgpt: return "YandexGPT"
+    case .localMLX: return "Local (FastVLM)"
+    }
+  }
+
+  /// True for a direct backend (see DirectAIBackend.swift) — false for the two LiveKit-routed
+  /// realtime engines.
+  var isDirect: Bool {
+    switch self {
+    case .openai, .gemini: return false
+    case .gigachat, .yandexgpt, .localMLX: return true
     }
   }
 }

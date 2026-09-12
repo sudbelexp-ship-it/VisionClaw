@@ -54,9 +54,19 @@ struct StreamSessionView: View {
     self._viewModel = StateObject(wrappedValue: StreamSessionViewModel(wearables: wearables))
   }
 
+  private var intelligenceEngine: IntelligenceEngine {
+    IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai
+  }
+
   var body: some View {
     ZStack {
-      if captureSource == .iPhoneCamera {
+      if intelligenceEngine.isDirect {
+        // GigaChat / YandexGPT / local FastVLM: a one-shot "ask" screen, no LiveKit call at all
+        // (see DirectAIBackend.swift). Glasses photo capture still needs the DAT-SDK-driven
+        // StreamSessionViewModel, so it rides along even though its LiveKit-facing state
+        // (isStreaming etc.) otherwise goes unused on this path.
+        AskAssistantView(streamViewModel: viewModel)
+      } else if captureSource == .iPhoneCamera {
         LiveKitStreamView(session: liveKit)
       } else if viewModel.isStreaming {
         // Glasses are just another camera: same call screen, same agent, with
@@ -95,7 +105,7 @@ struct StreamSessionView: View {
       viewModel.onDecodedFrame = { [weak liveKit] pixelBuffer in
         liveKit?.pushGlassesFrame(pixelBuffer)
       }
-      if captureSource == .iPhoneCamera {
+      if captureSource == .iPhoneCamera && !intelligenceEngine.isDirect {
         await liveKit.start()
       }
     }
@@ -106,7 +116,10 @@ struct StreamSessionView: View {
       // transient .waiting (glasses briefly asleep) keeps the call alive; only
       // a real .stopped ends it. Gating on isStreaming (which is true during
       // .waiting) opened the room before any frame and made the publish race.
-      guard captureSource == .glasses else { return }
+      // A direct engine (GigaChat/YandexGPT/local FastVLM) never opens a LiveKit
+      // room at all -- AskAssistantView drives StreamSessionViewModel only for
+      // on-demand photo capture.
+      guard captureSource == .glasses, !intelligenceEngine.isDirect else { return }
       Task {
         if status == .streaming {
           await liveKit.start()
@@ -115,13 +128,21 @@ struct StreamSessionView: View {
         }
       }
     }
-    .onChange(of: intelligenceRaw) { _ in
+    .onChange(of: intelligenceRaw) { newRaw in
       // The brain is chosen at session start (room-token metadata), so a live
       // call redials itself to apply the switch -- the user flips a toggle and
-      // three seconds later the other model picks up.
+      // three seconds later the other model picks up. Switching TO a direct
+      // engine (GigaChat/YandexGPT/local FastVLM) just hangs up instead --
+      // AskAssistantView takes over and never opens a room; switching AWAY
+      // from one dials in for the first time rather than redialing.
+      let newEngine = IntelligenceEngine(rawValue: newRaw) ?? .openai
       Task {
-        if liveKit.isActive {
+        if newEngine.isDirect {
+          if liveKit.isActive { await liveKit.stop() }
+        } else if liveKit.isActive {
           await liveKit.stop()
+          await liveKit.start()
+        } else if captureSource == .iPhoneCamera {
           await liveKit.start()
         }
       }
@@ -129,6 +150,10 @@ struct StreamSessionView: View {
     .onChange(of: captureSourceRaw) { newRaw in
       glassesAutoStarted = false
       Task {
+        if intelligenceEngine.isDirect {
+          // AskAssistantView owns photo capture directly; no LiveKit room to swap.
+          return
+        }
         if CaptureSource(rawValue: newRaw) == .iPhoneCamera {
           if viewModel.isStreaming { await viewModel.stopSession() }
           await liveKit.start()

@@ -68,9 +68,15 @@ struct VisionRootView: View {
   /// install with none configured sees only the sign-in gate. A signed-in but
   /// not-yet-approved account stays on the gate too: every other endpoint
   /// answers 401 until the study team approves it.
+  ///
+  /// GigaChat / YandexGPT / the local FastVLM model (see DirectAIBackend.swift) talk to their
+  /// own endpoint (or nothing at all, on-device) directly from the phone — they need none of
+  /// this gateway/account plumbing, so a user who only wants one of those three shouldn't be
+  /// forced through Google sign-in just to reach Settings and enter its key.
   @State private var needsAccessCode =
-    (SettingsManager.shared.agentBackend == .cloud && !GeminiConfig.isAgentConfigured)
-    || SettingsManager.shared.accountStatus == "pending"
+    !SettingsManager.shared.intelligenceEngine.isDirect
+    && ((SettingsManager.shared.agentBackend == .cloud && !GeminiConfig.isAgentConfigured)
+        || SettingsManager.shared.accountStatus == "pending")
 
   var body: some View {
     Group {

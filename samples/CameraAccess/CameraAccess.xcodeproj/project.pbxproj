@@ -59,6 +59,11 @@
 		ABDC4300C9A038EB8ABE3901 /* YandexGPTSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E16A961EEF8BB5B1BC81E1F /* YandexGPTSettingsView.swift */; };
 		E3A062FED08567FEEEF0FCAE /* FastVLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02347DB145D939D0E6B5A674 /* FastVLMService.swift */; };
 		6862EA6DC1AE280750F5C828 /* LocalMLXSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81FA6F01D10A04B4A4DDDA6 /* LocalMLXSettingsView.swift */; };
+		1488B7DAA326981DA9A8ABDE /* DirectAIBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F71EB69113BA510C3D0DBF /* DirectAIBackend.swift */; };
+		993D2E0070E161225A3592EB /* SpeechRecognizerOneShot.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED08FA9DB3B63F4B27F5F65F /* SpeechRecognizerOneShot.swift */; };
+		D16953355C4912A52FC4ED0A /* SpeechSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */; };
+		4A2AC56DF179837989B346A9 /* AskAssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1CE65947694AA2B0B86359B /* AskAssistantView.swift */; };
+		7F90C2A44C35C5E053017C8B /* CameraCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BDFC6FC0F4A95C52922C391 /* CameraCaptureView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -132,6 +137,11 @@
 		1E16A961EEF8BB5B1BC81E1F /* YandexGPTSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YandexGPTSettingsView.swift; sourceTree = "<group>"; };
 		02347DB145D939D0E6B5A674 /* FastVLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastVLMService.swift; sourceTree = "<group>"; };
 		D81FA6F01D10A04B4A4DDDA6 /* LocalMLXSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMLXSettingsView.swift; sourceTree = "<group>"; };
+		B1F71EB69113BA510C3D0DBF /* DirectAIBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectAIBackend.swift; sourceTree = "<group>"; };
+		ED08FA9DB3B63F4B27F5F65F /* SpeechRecognizerOneShot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognizerOneShot.swift; sourceTree = "<group>"; };
+		FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechSynthesizer.swift; sourceTree = "<group>"; };
+		C1CE65947694AA2B0B86359B /* AskAssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAssistantView.swift; sourceTree = "<group>"; };
+		3BDFC6FC0F4A95C52922C391 /* CameraCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -227,6 +237,7 @@
 				98B9DFA46A67B2FD07050823 /* GigaChat */,
 				CEEFD295486ECBDD4BE9D057 /* YandexGPT */,
 				3104366488BA8FAC1039BA51 /* LocalMLX */,
+				50B9E8D4F6E58DCD2AABC59C /* Ask */,
 				A1B2C3D42F0A000300000001 /* Gemini */,
 				8FD96B702E6F0A9800F56AB1 /* ViewModels */,
 				8FD96B762E6F0A9800F56AB1 /* Views */,
@@ -247,6 +258,7 @@
 				8FFD5FF22E8422580035E446 /* CircleButton.swift */,
 				8FFD5FF32E8422580035E446 /* CustomButton.swift */,
 				E6DA45172E79A63100E3F688 /* CardView.swift */,
+				3BDFC6FC0F4A95C52922C391 /* CameraCaptureView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -280,6 +292,17 @@
 				02347DB145D939D0E6B5A674 /* FastVLMService.swift */,
 			);
 			path = LocalMLX;
+			sourceTree = "<group>";
+		};
+		50B9E8D4F6E58DCD2AABC59C /* Ask */ = {
+			isa = PBXGroup;
+			children = (
+				B1F71EB69113BA510C3D0DBF /* DirectAIBackend.swift */,
+				ED08FA9DB3B63F4B27F5F65F /* SpeechRecognizerOneShot.swift */,
+				FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */,
+				C1CE65947694AA2B0B86359B /* AskAssistantView.swift */,
+			);
+			path = Ask;
 			sourceTree = "<group>";
 		};
 		CEEFD295486ECBDD4BE9D057 /* YandexGPT */ = {
@@ -485,6 +508,11 @@
 				ABDC4300C9A038EB8ABE3901 /* YandexGPTSettingsView.swift in Sources */,
 				E3A062FED08567FEEEF0FCAE /* FastVLMService.swift in Sources */,
 				6862EA6DC1AE280750F5C828 /* LocalMLXSettingsView.swift in Sources */,
+				1488B7DAA326981DA9A8ABDE /* DirectAIBackend.swift in Sources */,
+				993D2E0070E161225A3592EB /* SpeechRecognizerOneShot.swift in Sources */,
+				D16953355C4912A52FC4ED0A /* SpeechSynthesizer.swift in Sources */,
+				4A2AC56DF179837989B346A9 /* AskAssistantView.swift in Sources */,
+				7F90C2A44C35C5E053017C8B /* CameraCaptureView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -52,6 +52,16 @@ struct SettingsView: View {
   @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.openai.rawValue
   @AppStorage(SettingsManager.showCaptionsKey) private var showCaptions = true
 
+  private var intelligenceFooter: String {
+    switch IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai {
+    case .openai: return "OpenAI gpt-realtime. Applies to the next call."
+    case .gemini: return "Google Gemini Live. Applies to the next call."
+    case .gigachat: return "Sber's GigaChat, direct from the phone — no LiveKit call, tap to ask instead. Configure the key under GigaChat below."
+    case .yandexgpt: return "Yandex Cloud's YandexGPT, direct from the phone — tap to ask instead of a live call. Configure the key under YandexGPT below."
+    case .localMLX: return "Runs fully on-device via Apple MLX — no account, no network. Download the model under Local Model below first."
+    }
+  }
+
   var body: some View {
     NavigationView {
       Form {
@@ -66,16 +76,16 @@ struct SettingsView: View {
           .pickerStyle(.segmented)
         }
 
-        Section(header: Text("Intelligence"), footer: Text(intelligenceRaw == IntelligenceEngine.openai.rawValue
-          ? "OpenAI gpt-realtime. Applies to the next call."
-          : "Google Gemini Live. Applies to the next call.")) {
+        Section(header: Text("Intelligence"), footer: Text(intelligenceFooter)) {
           Picker("Model", selection: $intelligenceRaw) {
             ForEach(IntelligenceEngine.allCases, id: \.rawValue) { engine in
               Text(engine.label).tag(engine.rawValue)
             }
           }
-          .pickerStyle(.segmented)
-          Toggle("Show captions", isOn: $showCaptions)
+          .pickerStyle(.menu)
+          if !(IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai).isDirect {
+            Toggle("Show captions", isOn: $showCaptions)
+          }
         }
 
         // Cloud gateway is the only backend now.

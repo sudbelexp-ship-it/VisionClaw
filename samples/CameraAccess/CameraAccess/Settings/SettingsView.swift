@@ -140,8 +140,11 @@ struct SettingsView: View {
           NavigationLink("GigaChat") {
             GigaChatSettingsView()
           }
+          NavigationLink("YandexGPT") {
+            YandexGPTSettingsView()
+          }
         } footer: {
-          Text("Configure the GigaChat (Sber) backend. Selecting it as the active engine is added separately, once its \"ask\" screen lands.")
+          Text("Configure GigaChat (Sber) or YandexGPT (Yandex Cloud). Selecting either as the active engine is added separately, once the \"ask\" screen lands.")
         }
 
         Section {

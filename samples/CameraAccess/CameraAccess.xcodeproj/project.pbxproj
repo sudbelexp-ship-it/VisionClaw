@@ -55,6 +55,8 @@
 		D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */; };
 		5D7F2712092B574D9E4B558B /* russian_trusted_root_ca.pem in Resources */ = {isa = PBXBuildFile; fileRef = C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */; };
 		7BD8E345221C6F8C5C56D065 /* russian_trusted_sub_ca.pem in Resources */ = {isa = PBXBuildFile; fileRef = 16A40FCD42975A940F93BD26 /* russian_trusted_sub_ca.pem */; };
+		11FD173E69C64E17E0137C1C /* YandexGPTService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F6D62B25FEF0E830444848C /* YandexGPTService.swift */; };
+		ABDC4300C9A038EB8ABE3901 /* YandexGPTSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E16A961EEF8BB5B1BC81E1F /* YandexGPTSettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -124,6 +126,8 @@
 		28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatSettingsView.swift; sourceTree = "<group>"; };
 		C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */ = {isa = PBXFileReference; lastKnownFileType = text; path = russian_trusted_root_ca.pem; sourceTree = "<group>"; };
 		16A40FCD42975A940F93BD26 /* russian_trusted_sub_ca.pem */ = {isa = PBXFileReference; lastKnownFileType = text; path = russian_trusted_sub_ca.pem; sourceTree = "<group>"; };
+		7F6D62B25FEF0E830444848C /* YandexGPTService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YandexGPTService.swift; sourceTree = "<group>"; };
+		1E16A961EEF8BB5B1BC81E1F /* YandexGPTSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YandexGPTSettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -217,6 +221,7 @@
 				9DD6CAAE2F3C426600ED7098 /* Secrets.swift.example */,
 				9D3C69602F367CF700E641A5 /* iPhone */,
 				98B9DFA46A67B2FD07050823 /* GigaChat */,
+				CEEFD295486ECBDD4BE9D057 /* YandexGPT */,
 				A1B2C3D42F0A000300000001 /* Gemini */,
 				8FD96B702E6F0A9800F56AB1 /* ViewModels */,
 				8FD96B762E6F0A9800F56AB1 /* Views */,
@@ -258,8 +263,17 @@
 				9DD894C32F4047630090B9C3 /* ConnectedAppsView.swift */,
 				9DD894C12F4047630090B9C1 /* RecentTasksView.swift */,
 				28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */,
+				1E16A961EEF8BB5B1BC81E1F /* YandexGPTSettingsView.swift */,
 			);
 			path = Settings;
+			sourceTree = "<group>";
+		};
+		CEEFD295486ECBDD4BE9D057 /* YandexGPT */ = {
+			isa = PBXGroup;
+			children = (
+				7F6D62B25FEF0E830444848C /* YandexGPTService.swift */,
+			);
+			path = YandexGPT;
 			sourceTree = "<group>";
 		};
 		98B9DFA46A67B2FD07050823 /* GigaChat */ = {
@@ -453,6 +467,8 @@
 				F6333AAFC1AD35924AADB016 /* GigaChatClient.swift in Sources */,
 				EF1F65969A477C67301427D6 /* GigaChatService.swift in Sources */,
 				D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */,
+				11FD173E69C64E17E0137C1C /* YandexGPTService.swift in Sources */,
+				ABDC4300C9A038EB8ABE3901 /* YandexGPTSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

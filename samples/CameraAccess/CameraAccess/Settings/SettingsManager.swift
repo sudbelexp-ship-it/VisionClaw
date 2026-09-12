@@ -71,6 +71,8 @@ final class SettingsManager {
     case gigaChatVisionModel
     case gigaChatTextModel
     case gigaChatSystemPrompt
+    case yandexGPTApiKey
+    case yandexGPTFolderId
   }
 
   private init() {}
@@ -218,6 +220,18 @@ final class SettingsManager {
     set { defaults.set(newValue, forKey: Key.gigaChatSystemPrompt.rawValue) }
   }
 
+  // MARK: - YandexGPT (Yandex Cloud)
+
+  var yandexGPTApiKey: String {
+    get { defaults.string(forKey: Key.yandexGPTApiKey.rawValue) ?? "" }
+    set { defaults.set(newValue, forKey: Key.yandexGPTApiKey.rawValue) }
+  }
+
+  var yandexGPTFolderId: String {
+    get { defaults.string(forKey: Key.yandexGPTFolderId.rawValue) ?? "" }
+    set { defaults.set(newValue, forKey: Key.yandexGPTFolderId.rawValue) }
+  }
+
   // MARK: - Reset
 
   func resetAll() {
@@ -226,7 +240,8 @@ final class SettingsManager {
                 .accountEmail, .accountStatus,
                 .speakerOutputEnabled, .videoStreamingEnabled,
                 .proactiveNotificationsEnabled,
-                .gigaChatAuthKey, .gigaChatVisionModel, .gigaChatTextModel, .gigaChatSystemPrompt] {
+                .gigaChatAuthKey, .gigaChatVisionModel, .gigaChatTextModel, .gigaChatSystemPrompt,
+                .yandexGPTApiKey, .yandexGPTFolderId] {
       defaults.removeObject(forKey: key.rawValue)
     }
   }

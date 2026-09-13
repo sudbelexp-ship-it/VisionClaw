@@ -47,6 +47,7 @@ struct AskAssistantView: View {
     @State private var isAsking = false
     @State private var isCapturingGlassesPhoto = false
     @State private var showSettings = false
+    @State private var showTranslator = false
     @FocusState private var draftFocused: Bool
 
     private var engine: IntelligenceEngine {
@@ -82,6 +83,7 @@ struct AskAssistantView: View {
             .ignoresSafeArea()
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .fullScreenCover(isPresented: $showTranslator) { LiveTranslatorView() }
         .onChange(of: speechRecognizer.transcript) { newValue in
             if !newValue.isEmpty { draft = newValue }
         }
@@ -125,6 +127,12 @@ struct AskAssistantView: View {
             Spacer(minLength: 4)
 
             Menu {
+                Button {
+                    showTranslator = true
+                } label: {
+                    Label("Live translator", systemImage: "character.bubble")
+                }
+
                 Button {
                     newChat()
                 } label: {

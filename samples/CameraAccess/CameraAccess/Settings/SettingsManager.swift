@@ -40,20 +40,40 @@ enum IntelligenceEngine: String, CaseIterable {
 /// launch. Raw values are stored in UserDefaults under `captureSource`, which
 /// views also observe via @AppStorage so a change applies without a relaunch.
 enum CaptureSource: String, CaseIterable {
+  /// Glasses when they're paired and awake, this phone otherwise. The default, and what most
+  /// people mean: you don't choose a camera, you use whichever one you're wearing.
+  case automatic = "auto"
   case iPhoneCamera = "iphone"
   case glasses = "glasses"
-  /// Voice only -- no camera track published at all (LiveKitSession.start() skips camera setup
-  /// entirely, the same way it already degrades to voice-only on a camera failure). For when you
-  /// just want to talk, with no video overhead or camera permission needed.
-  case audioOnly = "audio"
 
   static let defaultsKey = "captureSource"
 
   var label: String {
     switch self {
-    case .iPhoneCamera: return "iPhone Camera"
+    case .automatic: return "Automatic"
+    case .iPhoneCamera: return "iPhone"
     case .glasses: return "Glasses"
-    case .audioOnly: return "Audio Only"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .automatic: return "wand.and.stars"
+    case .iPhoneCamera: return "iphone"
+    case .glasses: return "eyeglasses"
+    }
+  }
+
+  /// The camera a photo would actually come from right now.
+  ///
+  /// There used to be a third mode, "Audio Only", which disabled the camera button and answered
+  /// any tap on it with an error. It was removed: asking a question without a photo is simply not
+  /// pressing the camera, so the mode bought nothing and cost a dead button plus a confusing
+  /// error on a screen where everything else worked.
+  func resolved(glassesReady: Bool) -> CaptureSource {
+    switch self {
+    case .automatic: return glassesReady ? .glasses : .iPhoneCamera
+    case .iPhoneCamera, .glasses: return self
     }
   }
 }
@@ -139,17 +159,10 @@ final class SettingsManager {
   var captureSource: CaptureSource {
     get {
       guard let raw = defaults.string(forKey: CaptureSource.defaultsKey),
-            let source = CaptureSource(rawValue: raw) else { return .iPhoneCamera }
+            let source = CaptureSource(rawValue: raw) else { return .automatic }
       return source
     }
     set { defaults.set(newValue.rawValue, forKey: CaptureSource.defaultsKey) }
-  }
-
-  static let showCaptionsKey = "showCaptions"
-
-  var showCaptions: Bool {
-    get { defaults.object(forKey: Self.showCaptionsKey) as? Bool ?? true }
-    set { defaults.set(newValue, forKey: Self.showCaptionsKey) }
   }
 
   /// Dictation language for the Ask screen's mic, as a locale identifier ("ru-RU"). Empty means

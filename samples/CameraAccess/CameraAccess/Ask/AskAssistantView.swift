@@ -1,122 +1,76 @@
 // VisionClaw - AskAssistantView.swift
-// The screen shown instead of the LiveKit call when a direct backend (GigaChat, YandexGPT, or
-// the local FastVLM model) is selected — see DirectAIBackend.swift. Unlike the always-listening
-// LiveKit call, this is a one-shot "ask" interaction: type or speak a question, optionally attach
-// a photo, get a spoken + written reply back.
+// The app's only screen: a chat with whichever engine is selected (GigaChat, YandexGPT, or the
+// on-device FastVLM model -- see DirectAIBackend.swift).
+//
+// How a question with a photo works, since it is the whole point of the app and was not obvious:
+// tapping the camera takes ONE still frame -- from the glasses if they're the active source, from
+// the phone otherwise -- attaches it to the message you're writing, and sends both together. The
+// answer comes back as text and is spoken aloud. Nothing is streamed anywhere and the glasses
+// camera is switched off again the moment the frame is in hand.
 
 import SwiftUI
 import MWDATCore
 
-struct AskAssistantView: View {
-    /// Needed only for the glasses capture path (StreamSessionViewModel drives the DAT SDK's
-    /// streaming state machine that a photo capture requires). Nil on the Simulator or when the
-    /// Wearables SDK didn't initialize — the iPhone-camera capture path doesn't need it at all.
-    let streamViewModel: StreamSessionViewModel?
+/// One turn in the transcript. Photos live on the message that carried them, so scrolling back
+/// shows what was actually asked about rather than just the words.
+struct ChatMessage: Identifiable, Equatable {
+    enum Role { case user, assistant, failure }
 
-    @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
+    let id = UUID()
+    let role: Role
+    var text: String
+    var image: UIImage?
+
+    static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool { lhs.id == rhs.id }
+}
+
+struct AskAssistantView: View {
+    /// Drives the DAT SDK; needed only to grab a glasses frame. Nil on the Simulator or when the
+    /// Wearables SDK didn't initialize.
+    let streamViewModel: StreamSessionViewModel?
+    /// Whether the glasses are paired and usable, which is what "Automatic" keys off.
+    let glassesReady: Bool
+    /// Opens the pairing flow. Nil when there is no wearables stack to pair with at all.
+    let onConnectGlasses: (() -> Void)?
+
+    @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.automatic.rawValue
     @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
 
     @StateObject private var speechRecognizer = SpeechRecognizerOneShot.shared
     @StateObject private var speechSynthesizer = SpeechSynthesizer.shared
     @StateObject private var fastVLM = FastVLMService.shared
 
-    @State private var questionText = ""
+    @State private var messages: [ChatMessage] = []
+    @State private var draft = ""
     @State private var attachedImage: UIImage?
     @State private var showCameraCapture = false
     @State private var isAsking = false
     @State private var isCapturingGlassesPhoto = false
-    @State private var reply = ""
-    @State private var errorMessage: String?
     @State private var showSettings = false
+    @FocusState private var draftFocused: Bool
 
-    private var captureSource: CaptureSource {
-        CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera
-    }
     private var engine: IntelligenceEngine {
         IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat
     }
-    private var canAsk: Bool {
-        !isAsking && (!questionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachedImage != nil)
+    private var sourcePreference: CaptureSource {
+        CaptureSource(rawValue: captureSourceRaw) ?? .automatic
     }
-    /// Every engine, since all of them now answer directly from the phone.
-    private var directEngines: [IntelligenceEngine] { IntelligenceEngine.allCases }
+    /// Where a photo would come from if the camera were tapped right now.
+    private var activeSource: CaptureSource {
+        sourcePreference.resolved(glassesReady: glassesReady)
+    }
+    private var canSend: Bool {
+        !isAsking && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachedImage != nil)
+    }
 
     var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-
-            VStack(spacing: 0) {
-                topBar
-
-                // errorMessage is not part of this test any more: the error has its own pinned slot
-                // below, so an error on an otherwise empty screen should still show the "ask me
-                // something" prompt rather than an empty grey expanse.
-                if reply.isEmpty && attachedImage == nil && !isAsking {
-                    emptyState
-                    Spacer()
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            if let attachedImage {
-                                Image(uiImage: attachedImage)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(maxHeight: 220)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                                    .overlay(alignment: .topTrailing) {
-                                        Button {
-                                            self.attachedImage = nil
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundStyle(.white, .black.opacity(0.6))
-                                                .font(.title2)
-                                        }
-                                        .padding(6)
-                                    }
-                            }
-
-                            if isAsking {
-                                HStack(spacing: 10) {
-                                    ProgressView().tint(.white)
-                                    // First question on the local model spends tens of seconds
-                                    // parsing weights and compiling Metal shaders before any
-                                    // generation starts -- say so, or it reads as a hang.
-                                    Text(fastVLM.isLoadingModel
-                                         ? "Loading the model into memory — first run takes a minute…"
-                                         : "Thinking…")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.white.opacity(0.7))
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-
-                            if !reply.isEmpty {
-                                Text(reply)
-                                    .font(.body)
-                                    .foregroundStyle(.white)
-                                    .textSelection(.enabled)
-                                    .padding()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-                            }
-
-                        }
-                        .padding()
-                    }
-                }
-
-                // Pinned above the input bar rather than at the end of the transcript: an error
-                // that lands under a long answer is an error nobody sees, which is how a mic that
-                // was reporting a real problem still looked like a mic that silently did nothing.
-                if let errorMessage {
-                    errorCard(errorMessage)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                }
-
-                inputBar
-            }
+        VStack(spacing: 0) {
+            header
+            Divider().overlay(Color.white.opacity(0.08))
+            transcript
+            composer
         }
+        .background(Color.appBackground.ignoresSafeArea())
         .sheet(isPresented: $showCameraCapture) {
             CameraCaptureView(
                 onCaptured: { image in
@@ -129,184 +83,297 @@ struct AskAssistantView: View {
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .onChange(of: speechRecognizer.transcript) { newValue in
-            questionText = newValue
+            if !newValue.isEmpty { draft = newValue }
         }
-        // A dictation attempt that produced nothing used to end in silence — red mic off, empty
-        // field, no explanation. The recognizer now says which of the distinct failures happened.
         .onChange(of: speechRecognizer.lastError) { newValue in
-            if let newValue { errorMessage = newValue }
+            if let newValue { append(.init(role: .failure, text: newValue)) }
         }
+        // Each engine answers on its own, with no memory of the others' turns -- so leaving the
+        // previous conversation on screen after a switch implied a continuity that does not exist.
+        .onChange(of: intelligenceRaw) { _ in newChat() }
         .onDisappear {
             speechRecognizer.stop()
             speechSynthesizer.stop()
         }
     }
 
-    // MARK: - Chrome
+    // MARK: - Header
 
-    /// Same placement/style as the gear button on the LiveKit call screen (LiveKitStreamView) --
-    /// this screen replaces that one for a direct engine, so it needs the same way back to
-    /// Settings. The engine name doubles as a menu so switching backends doesn't require a trip
-    /// through Settings at all.
-    private var topBar: some View {
-        HStack {
+    private var header: some View {
+        HStack(spacing: 10) {
+            sourceButton
+
+            Spacer(minLength: 4)
+
             Menu {
-                ForEach(directEngines, id: \.rawValue) { option in
-                    Button {
-                        intelligenceRaw = option.rawValue
-                    } label: {
-                        if option == engine {
-                            Label(option.label, systemImage: "checkmark")
-                        } else {
-                            Text(option.label)
-                        }
+                Picker("Engine", selection: $intelligenceRaw) {
+                    ForEach(IntelligenceEngine.allCases, id: \.rawValue) { option in
+                        Text(option.label).tag(option.rawValue)
                     }
                 }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Text(engine.label)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
                     Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(.white.opacity(0.15), in: Capsule())
             }
-            Spacer()
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(10)
-                    .background(.black.opacity(0.35), in: Circle())
+
+            Spacer(minLength: 4)
+
+            Menu {
+                Button {
+                    newChat()
+                } label: {
+                    Label("New chat", systemImage: "square.and.pencil")
+                }
+                .disabled(messages.isEmpty)
+
+                if let onConnectGlasses {
+                    Button {
+                        onConnectGlasses()
+                    } label: {
+                        Label(glassesReady ? "Glasses" : "Connect glasses", systemImage: "eyeglasses")
+                    }
+                }
+
+                Button {
+                    showSettings = true
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    /// Which camera is live, and a one-tap way to change it. In the header rather than buried in
+    /// Settings because on a glasses app it is the single most useful thing to see at a glance.
+    private var sourceButton: some View {
+        Menu {
+            Picker("Camera", selection: $captureSourceRaw) {
+                ForEach(CaptureSource.allCases, id: \.rawValue) { source in
+                    Label(source.label, systemImage: source.symbol).tag(source.rawValue)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: activeSource.symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(activeSource.label)
+                    .font(.caption.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.appSurface, in: Capsule())
+        }
+    }
+
+    // MARK: - Transcript
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    if messages.isEmpty && !isAsking {
+                        emptyState.padding(.top, 60)
+                    }
+                    ForEach(messages) { message in
+                        MessageBubble(message: message).id(message.id)
+                    }
+                    if isAsking {
+                        thinkingBubble.id(Self.thinkingAnchor)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: messages.count) { _ in scrollToEnd(proxy) }
+            .onChange(of: isAsking) { _ in scrollToEnd(proxy) }
+        }
+    }
+
+    private static let thinkingAnchor = "thinking"
+
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            if isAsking {
+                proxy.scrollTo(Self.thinkingAnchor, anchor: .bottom)
+            } else if let last = messages.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: engine == .localMLX ? "cpu" : "text.bubble")
-                .font(.system(size: 40))
-                .foregroundStyle(.white.opacity(0.4))
-            Text("Ask \(engine.label) something")
-                .font(.headline)
-                .foregroundStyle(.white.opacity(0.8))
-            Text("Type below, tap the mic to speak, or attach a photo first.")
+        VStack(spacing: 10) {
+            Image(systemName: engine == .localMLX ? "cpu" : "bubble.left.and.bubble.right")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("Ask \(engine.label)")
+                .font(.title3.weight(.semibold))
+            Text("Type a question, hold the mic to speak, or tap the camera to ask about what "
+                 + "\(activeSource == .glasses ? "your glasses see" : "your phone sees").")
                 .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            Spacer()
-            Spacer()
+                .padding(.horizontal, 32)
         }
     }
 
-    private func errorCard(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
+    private var thinkingBubble: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            // The local model spends tens of seconds parsing weights and compiling Metal shaders
+            // before the first token -- say so, or it reads as a hang.
+            Text(fastVLM.isLoadingModel ? "Loading the model — the first run takes a minute…" : "Thinking…")
                 .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.9))
-            Spacer(minLength: 0)
+                .foregroundStyle(.secondary)
         }
-        .padding()
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.appSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private var inputBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                Task { await capturePhoto() }
-            } label: {
-                if isCapturingGlassesPhoto {
-                    ProgressView().tint(.white)
-                } else {
-                    Image(systemName: "camera.fill")
+    // MARK: - Composer
+
+    private var composer: some View {
+        VStack(spacing: 8) {
+            if let attachedImage {
+                attachmentChip(attachedImage)
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                CircleButton(
+                    systemName: "camera.fill",
+                    isBusy: isCapturingGlassesPhoto,
+                    accessibilityLabel: "Take a photo"
+                ) {
+                    Task { await capturePhoto() }
                 }
-            }
-            .disabled(isAsking || isCapturingGlassesPhoto)
+                .disabled(isAsking || isCapturingGlassesPhoto)
 
-            TextField("", text: $questionText, prompt: Text("Ask something…").foregroundStyle(.white.opacity(0.4)), axis: .vertical)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
-                .lineLimit(1...4)
+                HStack(alignment: .bottom, spacing: 6) {
+                    TextField("Message", text: $draft, axis: .vertical)
+                        .focused($draftFocused)
+                        .lineLimit(1...5)
+                        .padding(.vertical, 8)
+                        .padding(.leading, 14)
 
-            Button {
-                Task { await toggleListening() }
-            } label: {
-                Image(systemName: speechRecognizer.isListening ? "mic.fill" : "mic")
-                    .foregroundStyle(speechRecognizer.isListening ? .red : .white)
-            }
-            .disabled(isAsking)
-
-            Button {
-                Task { await ask() }
-            } label: {
-                if isAsking {
-                    ProgressView().tint(.white)
-                } else {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(canAsk ? .white : .white.opacity(0.3))
+                    CircleButton(
+                        systemName: speechRecognizer.isListening ? "waveform" : "mic.fill",
+                        tint: speechRecognizer.isListening ? .red : .secondary,
+                        filled: false,
+                        accessibilityLabel: speechRecognizer.isListening ? "Stop dictating" : "Dictate"
+                    ) {
+                        Task { await toggleListening() }
+                    }
+                    .disabled(isAsking)
+                    .padding(.trailing, 4)
+                    .padding(.bottom, 2)
                 }
+                .background(Color.appSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+                CircleButton(
+                    systemName: "arrow.up",
+                    tint: .white,
+                    background: canSend ? Color.accentColor : Color.appSurface,
+                    isBusy: isAsking,
+                    accessibilityLabel: "Send"
+                ) {
+                    Task { await send() }
+                }
+                .disabled(!canSend)
             }
-            .disabled(!canAsk)
         }
-        .font(.system(size: 18))
-        .foregroundStyle(.white.opacity(0.85))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.black.opacity(0.4))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(.bar)
+    }
+
+    /// The pending photo as a small thumbnail above the field, the way every messaging app does
+    /// it -- the previous full-width preview pushed the conversation off screen.
+    private func attachmentChip(_ image: UIImage) -> some View {
+        HStack {
+            ZStack(alignment: .topTrailing) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Button {
+                    attachedImage = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .offset(x: 6, y: -6)
+            }
+            .padding(.top, 6)
+            Spacer()
+        }
+        .padding(.horizontal, 4)
     }
 
     // MARK: - Actions
+
+    private func newChat() {
+        speechSynthesizer.stop()
+        messages.removeAll()
+        attachedImage = nil
+        draft = ""
+    }
+
+    private func append(_ message: ChatMessage) {
+        messages.append(message)
+    }
 
     private func toggleListening() async {
         if speechRecognizer.isListening {
             speechRecognizer.stop()
             return
         }
-        errorMessage = nil
-        // The reply is spoken aloud, and AVSpeechSynthesizer holds the audio session while it
-        // talks. Reconfiguring that session for capture underneath it fails, so tapping the mic
-        // right after an answer did nothing at all — which read as "the mic is broken for this
-        // engine" purely because that engine's answer happened to still be playing.
+        // The answer is spoken aloud and AVSpeechSynthesizer holds the audio session while it
+        // talks; reconfiguring that session for capture underneath it fails silently.
         speechSynthesizer.stop()
+        draftFocused = false
         do {
             try await speechRecognizer.start()
         } catch {
-            errorMessage = error.localizedDescription
+            append(.init(role: .failure, text: error.localizedDescription))
         }
     }
 
     private func capturePhoto() async {
-        errorMessage = nil
-        switch captureSource {
-        case .iPhoneCamera:
+        switch activeSource {
+        case .iPhoneCamera, .automatic:
             showCameraCapture = true
         case .glasses:
             await captureGlassesPhoto()
-        case .audioOnly:
-            errorMessage = "No camera in Audio Only mode. Switch source in Settings to attach a photo."
         }
     }
 
-    /// "Click and go": start the glasses stream only if it isn't already running, capture one
-    /// frame, then stop it again if we're the ones who started it — mirrors OpenVision's
-    /// currentGlassesImage(), the same "don't leave the camera LED on" pattern.
+    /// "Click and go": start the glasses stream only if it isn't already running, take one frame,
+    /// then stop it again if we were the ones who started it -- so the camera light never stays on
+    /// longer than the shot needs.
     private func captureGlassesPhoto() async {
         guard let streamViewModel else {
-            errorMessage = "Glasses aren't available."
+            append(.init(role: .failure, text: "Glasses aren't available on this device."))
             return
         }
         isCapturingGlassesPhoto = true
@@ -321,7 +388,7 @@ struct AskAssistantView: View {
             }
         }
         guard streamViewModel.isStreaming else {
-            errorMessage = "Couldn't start the glasses camera."
+            append(.init(role: .failure, text: "Couldn't start the glasses camera. Are they on and unfolded?"))
             return
         }
 
@@ -336,7 +403,7 @@ struct AskAssistantView: View {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         if attachedImage == nil {
-            errorMessage = "Couldn't capture a photo from the glasses."
+            append(.init(role: .failure, text: "Couldn't capture a photo from the glasses."))
         }
 
         if !wasStreaming {
@@ -344,23 +411,126 @@ struct AskAssistantView: View {
         }
     }
 
-    private func ask() async {
-        let backend = DirectAIBackendRouter.backend(for: engine)
-        errorMessage = nil
-        reply = ""
+    private func send() async {
+        guard canSend else { return }
+        speechRecognizer.stop()
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let image = attachedImage
+
+        // Post the question before the request starts. It used to sit in the input field until
+        // the answer arrived, which looked like the send button had not registered at all.
+        append(.init(role: .user, text: text, image: image))
+        draft = ""
+        attachedImage = nil
+
         isAsking = true
         defer { isAsking = false }
 
-        let text = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let imageData = attachedImage?.jpegData(compressionQuality: 0.85)
+        let backend = DirectAIBackendRouter.backend(for: engine)
         do {
-            let answer = try await backend.ask(text: text, imageData: imageData)
-            reply = answer
+            let answer = try await backend.ask(text: text, imageData: image?.jpegData(compressionQuality: 0.85))
+            append(.init(role: .assistant, text: answer))
             speechSynthesizer.speak(answer)
-            questionText = ""
-            attachedImage = nil
         } catch {
-            errorMessage = error.localizedDescription
+            append(.init(role: .failure, text: error.localizedDescription))
         }
     }
+}
+
+// MARK: - Pieces
+
+private struct MessageBubble: View {
+    let message: ChatMessage
+
+    var body: some View {
+        HStack {
+            if message.role == .user { Spacer(minLength: 40) }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let image = message.image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: 220, maxHeight: 220)
+                        .clipped()
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                if !message.text.isEmpty {
+                    if message.role == .failure {
+                        Label(message.text, systemImage: "exclamationmark.triangle.fill")
+                            .font(.subheadline)
+                    } else {
+                        Text(message.text)
+                            .font(.body)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .foregroundStyle(foreground)
+            .background(background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            if message.role != .user { Spacer(minLength: 40) }
+        }
+    }
+
+    private var foreground: Color {
+        switch message.role {
+        case .user: return .white
+        case .assistant: return .primary
+        case .failure: return .orange
+        }
+    }
+
+    private var background: Color {
+        switch message.role {
+        case .user: return .accentColor
+        case .assistant: return .appSurface
+        case .failure: return .orange.opacity(0.15)
+        }
+    }
+}
+
+/// One consistent tap target for every control on the composer. They were previously bare glyphs
+/// of assorted sizes sitting directly on the background, which is what made the bottom bar look
+/// unfinished and made the small ones awkward to hit.
+private struct CircleButton: View {
+    let systemName: String
+    var tint: Color = .secondary
+    var background: Color = .clear
+    var filled: Bool = true
+    var isBusy: Bool = false
+    var accessibilityLabel: String
+    let action: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                if filled {
+                    Circle().fill(background == .clear ? Color.appSurface : background)
+                }
+                if isBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: systemName)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+            .frame(width: 38, height: 38)
+            .opacity(isEnabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+extension Color {
+    /// One surface colour for bubbles, chips and buttons, so the screen reads as a single design
+    /// rather than a pile of one-off opacities. Both adapt to light and dark automatically.
+    static let appSurface = Color(uiColor: .secondarySystemBackground)
+    static let appBackground = Color(uiColor: .systemBackground)
 }

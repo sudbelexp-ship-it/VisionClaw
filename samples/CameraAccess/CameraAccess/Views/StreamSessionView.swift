@@ -9,14 +9,14 @@
 //
 // StreamSessionView.swift
 //
-// The app's front door. Every engine now answers directly from the phone
-// (GigaChat, YandexGPT, or the on-device FastVLM model), so this is simply the
-// ask screen -- the LiveKit call screen, the agent worker and the gateway that
-// OpenAI/Gemini needed are gone.
+// The app's front door: the chat, plus the glasses plumbing it draws on.
 //
-// The glasses still matter: StreamSessionViewModel drives the DAT SDK, and
-// AskAssistantView reaches into it to capture a single frame on demand. Glasses
-// that aren't registered yet get the pairing screen instead.
+// Every engine answers directly from the phone now, so there is no call screen
+// and no server leg -- the LiveKit path that OpenAI/Gemini needed is gone.
+// Glasses are a camera, not a mode: AskAssistantView asks StreamSessionViewModel
+// for a single frame when the camera button is tapped. Pairing is reachable from
+// the chat's own menu rather than blocking the whole screen, so an unpaired pair
+// of glasses no longer stands between the user and a text question.
 //
 
 import MWDATCore
@@ -27,11 +27,7 @@ struct StreamSessionView: View {
   let wearables: WearablesInterface?
   private let wearablesViewModel: WearablesViewModel?
   @StateObject private var viewModel: StreamSessionViewModel
-  @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
-
-  private var captureSource: CaptureSource {
-    CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera
-  }
+  @State private var showPairing = false
 
   init(wearables: WearablesInterface?, wearablesVM: WearablesViewModel?) {
     self.wearables = wearables
@@ -39,18 +35,29 @@ struct StreamSessionView: View {
     self._viewModel = StateObject(wrappedValue: StreamSessionViewModel(wearables: wearables))
   }
 
+  /// Paired and usable. "Automatic" resolves to the glasses only when this is true, which is what
+  /// makes the source indicator in the header honest rather than aspirational.
+  private var glassesReady: Bool {
+    guard let wearablesViewModel else { return false }
+    return wearablesViewModel.registrationState == .registered || wearablesViewModel.hasMockDevice
+  }
+
   var body: some View {
-    ZStack {
-      // Glasses as the capture source but not paired yet is the one case that needs a
-      // different screen: asking a question is fine, but the camera button would fail
-      // every time until the pairing in the Meta AI app is done.
-      if captureSource == .glasses,
-         let wearablesViewModel,
-         wearablesViewModel.registrationState != .registered,
-         !wearablesViewModel.hasMockDevice {
-        HomeScreenView(viewModel: wearablesViewModel)
-      } else {
-        AskAssistantView(streamViewModel: viewModel)
+    AskAssistantView(
+      streamViewModel: viewModel,
+      glassesReady: glassesReady,
+      onConnectGlasses: wearablesViewModel == nil ? nil : { showPairing = true }
+    )
+    .sheet(isPresented: $showPairing) {
+      if let wearablesViewModel {
+        NavigationView {
+          HomeScreenView(viewModel: wearablesViewModel)
+            .toolbar {
+              ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Done") { showPairing = false }
+              }
+            }
+        }
       }
     }
     .alert("Error", isPresented: $viewModel.showError) {

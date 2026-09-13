@@ -8,15 +8,15 @@ struct SettingsView: View {
   @State private var showResetConfirmation = false
   // Applies immediately rather than on Save: the root view observes the same
   // key and swaps the capture pipeline live.
-  @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
+  @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.automatic.rawValue
   @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
   @AppStorage(SettingsManager.speechLocaleKey) private var speechLocaleRaw = ""
 
   private var cameraFooter: String {
-    switch CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera {
-    case .glasses: return "Streams from your Meta glasses. Connecting them happens on the main screen."
-    case .iPhoneCamera: return "Uses this phone's camera. The app opens straight into it, with voice ready."
-    case .audioOnly: return "Voice only, no camera at all -- lowest overhead, quickest to start."
+    switch CaptureSource(rawValue: captureSourceRaw) ?? .automatic {
+    case .automatic: return "Your glasses when they're paired and awake, this phone otherwise. The chat header always shows which one is live."
+    case .glasses: return "Always your Meta glasses. Pair them from the menu in the chat header."
+    case .iPhoneCamera: return "Always this phone's camera, even with glasses connected."
     }
   }
 

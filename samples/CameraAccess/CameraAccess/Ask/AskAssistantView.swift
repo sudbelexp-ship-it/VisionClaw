@@ -265,7 +265,7 @@ struct AskAssistantView: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                CircleButton(
+                ComposerButton(
                     systemName: "camera.fill",
                     isBusy: isCapturingGlassesPhoto,
                     accessibilityLabel: "Take a photo"
@@ -281,7 +281,7 @@ struct AskAssistantView: View {
                         .padding(.vertical, 8)
                         .padding(.leading, 14)
 
-                    CircleButton(
+                    ComposerButton(
                         systemName: speechRecognizer.isListening ? "waveform" : "mic.fill",
                         tint: speechRecognizer.isListening ? .red : .secondary,
                         filled: false,
@@ -295,7 +295,7 @@ struct AskAssistantView: View {
                 }
                 .background(Color.appSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
-                CircleButton(
+                ComposerButton(
                     systemName: "arrow.up",
                     tint: .white,
                     background: canSend ? Color.accentColor : Color.appSurface,
@@ -503,7 +503,7 @@ private struct MessageBubble: View {
 /// One consistent tap target for every control on the composer. They were previously bare glyphs
 /// of assorted sizes sitting directly on the background, which is what made the bottom bar look
 /// unfinished and made the small ones awkward to hit.
-private struct CircleButton: View {
+private struct ComposerButton: View {
     let systemName: String
     var tint: Color = .secondary
     var background: Color = .clear

@@ -2,16 +2,16 @@
 // Live interpreting: someone speaks English or Chinese at you, and a moment later you hear it in
 // your own language through whatever you're wearing, with the running transcript on the phone.
 //
-// Why this uses no AI backend at all
+// Why nothing here talks to a server
 // ----------------------------------
 // The whole requirement is latency. A round trip to GigaChat, YandexGPT or any other hosted model
 // costs roughly 1-3 seconds per phrase before the first word comes back, which is not interpreting
-// -- it is subtitles arriving after the speaker has moved on. So all three stages run on the
-// device instead:
+// -- it is subtitles arriving after the speaker has moved on. And a translator is most needed
+// abroad, which is exactly where the network is worst. So all three stages run on the device:
 //
 //   speech -> text   SFSpeechRecognizer with requiresOnDeviceRecognition
-//   text -> text     Apple's Translation framework (Core ML models, offline once the language
-//                    pack is downloaded, free, no key)
+//   text -> text     either Apple's Translation framework or Qwen3 through MLX -- see
+//                    TranslatorEngine below and LocalLLMTranslator.swift for why both exist
 //   text -> speech   AVSpeechSynthesizer
 //
 // Nothing leaves the phone, nothing needs a network, and the delay is dominated by how long we
@@ -25,6 +25,34 @@ import SwiftUI
 import Translation
 
 // MARK: - Model
+
+/// Which translator does the text-to-text step.
+///
+/// Apple's is instant to set up and costs nothing, but it translates each phrase in isolation and
+/// is noticeably literal. The local LLM has to be downloaded once and is slower per phrase, but it
+/// sees the preceding turns, so it keeps gender, formality and referents straight across a real
+/// conversation. Both are fully offline; the choice is setup cost against quality, so it belongs
+/// to the user rather than to a hardcoded decision here.
+enum TranslatorEngine: String, CaseIterable, Identifiable {
+    case apple
+    case localLLM
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .apple: return "Apple Translate"
+        case .localLLM: return "Qwen3 (on-device)"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .apple: return "Built in, nothing to download. Fast and literal."
+        case .localLLM: return "Stronger with idiom, context and Chinese. Needs a one-time download."
+        }
+    }
+}
 
 struct TranslatedSegment: Identifiable, Equatable {
     let id = UUID()
@@ -265,12 +293,20 @@ struct LiveTranslatorView: View {
     @StateObject private var engine = LiveTranslatorEngine()
     @StateObject private var speech = SpeechSynthesizer.shared
 
+    @StateObject private var llm = LocalLLMTranslator.shared
+
     @AppStorage("translatorSource") private var sourceId = "en-US"
     @AppStorage("translatorTarget") private var targetId = "ru-RU"
     @AppStorage("translatorSpeaks") private var speakAloud = true
+    @AppStorage("translatorEngine") private var engineRaw = TranslatorEngine.apple.rawValue
 
     @State private var configuration: TranslationSession.Configuration?
-    @State private var downloadNeeded = false
+    @State private var isDownloadingModel = false
+    @State private var showEngineSheet = false
+
+    private var translationEngine: TranslatorEngine {
+        TranslatorEngine(rawValue: engineRaw) ?? .apple
+    }
 
     private var source: TranslatorLanguage {
         TranslatorLanguage.sources.first { $0.id == sourceId } ?? TranslatorLanguage.sources[0]
@@ -312,19 +348,26 @@ struct LiveTranslatorView: View {
             .translationTask(configuration) { session in
                 do {
                     try await session.prepareTranslation()
-                    downloadNeeded = false
                     for await id in engine.phrases {
                         guard let segment = engine.segment(id) else { continue }
-                        let response = try await session.translate(segment.original)
-                        engine.setTranslation(response.targetText, for: id)
-                        if speakAloud {
-                            speech.speak(response.targetText)
+                        let text: String
+                        switch translationEngine {
+                        case .apple:
+                            text = try await session.translate(segment.original).targetText
+                        case .localLLM:
+                            text = try await llm.translate(
+                                segment.original,
+                                from: source.name, to: target.name,
+                                recentContext: engine.segments.compactMap(\.translated).suffix(3).map { $0 })
                         }
+                        engine.setTranslation(text, for: id)
+                        if speakAloud { speech.speak(text) }
                     }
                 } catch {
                     engine.errorText = error.localizedDescription
                 }
             }
+            .sheet(isPresented: $showEngineSheet) { engineSheet }
             .task(id: "\(sourceId)-\(targetId)") { await refreshConfiguration() }
         }
     }
@@ -435,6 +478,23 @@ struct LiveTranslatorView: View {
 
     private var controls: some View {
         VStack(spacing: 12) {
+            Button {
+                showEngineSheet = true
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: translationEngine == .apple ? "apple.logo" : "cpu")
+                    Text(translationEngine.label)
+                    if translationEngine == .localLLM && !llm.isDownloaded {
+                        Text("— not downloaded").foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                }
+                .font(.subheadline)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 4)
+
             Toggle(isOn: $speakAloud) {
                 Label("Speak the translation aloud", systemImage: "ear")
                     .font(.subheadline)
@@ -464,6 +524,89 @@ struct LiveTranslatorView: View {
         .padding(.top, 10)
         .padding(.bottom, 14)
         .background(.bar)
+    }
+
+
+    /// Engine picker plus the download that the local model needs. Kept on the translator screen
+    /// rather than in Settings: it is only ever relevant while standing here deciding whether the
+    /// translation is good enough.
+    private var engineSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    ForEach(TranslatorEngine.allCases) { option in
+                        Button {
+                            engineRaw = option.rawValue
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: option == translationEngine
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(option == translationEngine ? Color.accentColor : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.label).foregroundStyle(.primary)
+                                    Text(option.blurb).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Translator")
+                }
+
+                if translationEngine == .localLLM {
+                    Section {
+                        Picker("Model", selection: Binding(
+                            get: { llm.tier },
+                            set: { llm.tier = $0 }
+                        )) {
+                            ForEach(TranslatorModelTier.allCases) { tier in
+                                Text("\(tier.label) · \(tier.sizeText)").tag(tier)
+                            }
+                        }
+                        .pickerStyle(.inline)
+
+                        if llm.isDownloaded {
+                            Label("Downloaded", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Button("Delete from this phone", role: .destructive) {
+                                Task { _ = await llm.deleteDownloadedModel() }
+                            }
+                        } else if isDownloadingModel {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ProgressView(value: llm.downloadProgress)
+                                Text(llm.isFinalizing
+                                     ? "Unpacking…"
+                                     : "Downloading \(Int(llm.downloadProgress * 100))%")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Button {
+                                isDownloadingModel = true
+                                Task {
+                                    do { try await llm.download { _ in } }
+                                    catch { engine.errorText = error.localizedDescription }
+                                    isDownloadingModel = false
+                                }
+                            } label: {
+                                Label("Download \(llm.tier.sizeText)", systemImage: "arrow.down.circle")
+                            }
+                        }
+                    } header: {
+                        Text("On-device model")
+                    } footer: {
+                        Text("Downloads once over Wi-Fi, then works with no network at all. "
+                             + "The larger model translates better; the smaller one answers sooner.")
+                    }
+                }
+            }
+            .navigationTitle("Translation engine")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showEngineSheet = false }
+                }
+            }
+        }
     }
 
     /// Rebuilds the translation configuration when either language changes, which is also what

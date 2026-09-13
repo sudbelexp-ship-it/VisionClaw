@@ -193,10 +193,15 @@ final class LocalLLMTranslator: ObservableObject {
     /// this better than a sentence-level model rather than merely bigger: with the preceding turns
     /// in the prompt the model keeps gender, formality and referents consistent across a
     /// conversation instead of resetting at every full stop.
+    /// `isFragment` switches the instructions for simultaneous mode, where chunks are cut on a
+    /// word count rather than a sentence and routinely start and end mid-clause. Without it the
+    /// model tries to round every fragment off into a sentence, which reads as stuttering
+    /// repetition once the fragments are spoken back to back.
     func translate(_ text: String,
                    from sourceName: String,
                    to targetName: String,
-                   recentContext: [String] = []) async throws -> String {
+                   recentContext: [String] = [],
+                   isFragment: Bool = false) async throws -> String {
         if modelContainer == nil || loadedTier != tier {
             try await connect()
         }
@@ -205,12 +210,26 @@ final class LocalLLMTranslator: ObservableObject {
         var system = """
             You are a simultaneous interpreter. Translate the user's \(sourceName) into \(targetName).
             Output ONLY the translation: no explanations, no transliteration, no quotes, no notes, \
-            no original text. Keep the speaker's register and tone. If a phrase is cut off \
-            mid-sentence, translate the fragment as it stands rather than completing it.
+            no original text. Keep the speaker's register and tone.
             """
+        if isFragment {
+            system += """
+                \n
+                You are interpreting a live stream of speech, so each input is a FRAGMENT cut out \
+                of a sentence in progress. Translate only this fragment and only once. It may begin \
+                or end mid-clause: leave it unfinished rather than inventing an ending, and do not \
+                repeat or restate anything you already translated. Your output is spoken aloud \
+                immediately after the previous fragment, so it must read as the continuation of it.
+                """
+        } else {
+            system += " If a phrase is cut off mid-sentence, translate the fragment as it stands "
+                + "rather than completing it."
+        }
         if !recentContext.isEmpty {
-            system += "\n\nEarlier in this conversation (already translated, for context only — do "
-                + "not translate these again):\n" + recentContext.suffix(3).joined(separator: "\n")
+            system += "\n\n" + (isFragment ? "What you have already said, in order (do not repeat "
+                               + "any of it):" : "Earlier in this conversation (context only — do "
+                               + "not translate these again):")
+                + "\n" + recentContext.suffix(3).joined(separator: "\n")
         }
         // Qwen3 ships a reasoning mode that is on by default and emits a long <think> block before
         // the answer. For interpreting that is fatal: it turns a sub-second translation into many

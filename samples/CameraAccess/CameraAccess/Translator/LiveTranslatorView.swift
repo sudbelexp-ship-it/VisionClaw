@@ -1,21 +1,18 @@
 // VisionClaw - LiveTranslatorView.swift
-// Live interpreting: someone speaks English or Chinese at you, and a moment later you hear it in
-// your own language through whatever you're wearing, with the running transcript on the phone.
+// The simultaneous-interpreter screen. The pipeline itself lives in SimultaneousInterpreter.swift;
+// this is the part you look at and touch.
 //
 // Why nothing here talks to a server
 // ----------------------------------
-// The whole requirement is latency. A round trip to GigaChat, YandexGPT or any other hosted model
-// costs roughly 1-3 seconds per phrase before the first word comes back, which is not interpreting
-// -- it is subtitles arriving after the speaker has moved on. And a translator is most needed
-// abroad, which is exactly where the network is worst. So all three stages run on the device:
+// A round trip to GigaChat, YandexGPT or any other hosted model costs roughly 1-3 seconds per
+// chunk before the first word comes back, and this mode emits a chunk every couple of seconds --
+// the queue would fall behind the speaker within one sentence and never recover. A translator is
+// also most needed abroad, which is exactly where the network is worst. So all three stages run on
+// the device:
 //
 //   speech -> text   SFSpeechRecognizer with requiresOnDeviceRecognition
-//   text -> text     either Apple's Translation framework or Qwen3 through MLX -- see
-//                    TranslatorEngine below and LocalLLMTranslator.swift for why both exist
-//   text -> speech   AVSpeechSynthesizer
-//
-// Nothing leaves the phone, nothing needs a network, and the delay is dominated by how long we
-// wait to be sure the speaker finished a phrase -- see `phraseGap`.
+//   text -> text     Apple's Translation framework or Qwen3 through MLX (see TranslatorEngine)
+//   text -> speech   AVSpeechSynthesizer, rendered through the interpreter's own audio engine
 //
 // Requires iOS 18 for TranslationSession, which is why the deployment target moved up from 17.2.
 
@@ -24,15 +21,15 @@ import Speech
 import SwiftUI
 import Translation
 
-// MARK: - Model
+// MARK: - Choices
 
 /// Which translator does the text-to-text step.
 ///
-/// Apple's is instant to set up and costs nothing, but it translates each phrase in isolation and
-/// is noticeably literal. The local LLM has to be downloaded once and is slower per phrase, but it
-/// sees the preceding turns, so it keeps gender, formality and referents straight across a real
-/// conversation. Both are fully offline; the choice is setup cost against quality, so it belongs
-/// to the user rather than to a hardcoded decision here.
+/// Apple's is instant to set up and costs nothing, but it translates each chunk in isolation and
+/// is noticeably literal -- and in this mode the chunks are sentence fragments, which it handles
+/// worst of all. The local LLM has to be downloaded once and costs a few hundred milliseconds per
+/// chunk, but it is told what it has already said, so fragments join up into running speech. Both
+/// are fully offline; the trade is setup cost against quality, so the choice is the user's.
 enum TranslatorEngine: String, CaseIterable, Identifiable {
     case apple
     case localLLM
@@ -48,26 +45,19 @@ enum TranslatorEngine: String, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
-        case .apple: return "Built in, nothing to download. Fast and literal."
-        case .localLLM: return "Stronger with idiom, context and Chinese. Needs a one-time download."
+        case .apple: return "Built in, nothing to download. Fast and literal; weaker on fragments."
+        case .localLLM: return "Follows the thread across fragments. Needs a one-time download."
         }
     }
 }
 
-struct TranslatedSegment: Identifiable, Equatable {
-    let id = UUID()
-    let original: String
-    var translated: String?
-}
-
-/// A language pair the user can pick. Kept to a short list of what people actually need rather
-/// than everything Apple supports -- a 30-item picker is worse than four buttons.
+/// A language pair the user can pick. Deliberately a short list of what people actually need --
+/// a 30-item picker is worse than six entries.
 struct TranslatorLanguage: Identifiable, Hashable {
     let id: String        // BCP-47, e.g. "en-US"
     let name: String
-    /// The locale SFSpeechRecognizer should listen in.
+
     var speechLocale: Locale { Locale(identifier: id) }
-    /// The language Translation should treat as the source/target.
     var translationLanguage: Locale.Language { Locale.Language(identifier: String(id.prefix(2))) }
 
     static let sources: [TranslatorLanguage] = [
@@ -85,204 +75,46 @@ struct TranslatorLanguage: Identifiable, Hashable {
     ]
 }
 
-// MARK: - Engine
+/// How far behind the speaker the interpreter runs. Named for what the user experiences rather
+/// than for the two numbers underneath, because "6 words or 2 seconds" is not a decision anyone
+/// wants to make in a conversation.
+enum InterpreterPace: String, CaseIterable, Identifiable {
+    case fastest
+    case balanced
+    case accurate
 
-/// Continuous recognition, chopped into phrases.
-///
-/// One long-lived recognition task rather than one per phrase: restarting the recognizer for every
-/// sentence clips the first syllable of the next one. Instead the task keeps running and we emit
-/// only the *new* text since the last flush, restarting solely when iOS ends the task on its own
-/// (it caps a single request's duration) or when the user stops.
-@MainActor
-final class LiveTranslatorEngine: ObservableObject {
-    @Published private(set) var isRunning = false
-    /// What the speaker is saying right now, before the phrase is considered finished.
-    @Published private(set) var partial = ""
-    @Published private(set) var segments: [TranslatedSegment] = []
-    @Published var errorText: String?
+    var id: String { rawValue }
 
-    /// How long a pause counts as "they finished a thought". The single knob that trades latency
-    /// against chopping people off mid-sentence; 0.7s is about the length of a natural comma pause.
-    private let phraseGap: TimeInterval = 0.7
-
-    private let audioEngine = AVAudioEngine()
-    private var recognizer: SFSpeechRecognizer?
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
-    private var flushWorkItem: DispatchWorkItem?
-    /// Characters of the current task's transcript already turned into a segment.
-    private var emittedPrefixLength = 0
-    private var sourceLanguage: TranslatorLanguage = TranslatorLanguage.sources[0]
-
-    /// Finished phrases waiting to be translated. The view pumps this into a TranslationSession,
-    /// because Apple vends sessions only through a SwiftUI modifier.
-    private(set) lazy var phrases: AsyncStream<UUID> = AsyncStream { self.phraseContinuation = $0 }
-    private var phraseContinuation: AsyncStream<UUID>.Continuation?
-
-    func start(source: TranslatorLanguage) async {
-        guard !isRunning else { return }
-        errorText = nil
-        sourceLanguage = source
-        _ = phrases   // force the lazy stream so the continuation exists before the first phrase
-
-        guard await requestPermissions() else {
-            errorText = "Microphone and speech-recognition permission are both needed."
-            return
-        }
-        guard let recognizer = SFSpeechRecognizer(locale: source.speechLocale), recognizer.isAvailable else {
-            errorText = "This phone can't recognise \(source.name) speech. "
-                + "Add the language under iOS Settings → General → Keyboard → Dictation."
-            return
-        }
-        self.recognizer = recognizer
-
-        do {
-            let session = AVAudioSession.sharedInstance()
-            // .allowBluetoothA2DP so the translation plays into the glasses or earbuds, while
-            // capture stays on the phone's own microphone: HFP would give us the headset's mic at
-            // telephone quality AND take over playback, which is exactly the combination that
-            // sounded terrible before.
-            try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-                try? session.setPreferredInput(builtIn)
-            }
-            try startTask()
-            isRunning = true
-        } catch {
-            errorText = error.localizedDescription
-            stop()
+    var label: String {
+        switch self {
+        case .fastest: return "Fastest"
+        case .balanced: return "Balanced"
+        case .accurate: return "Most accurate"
         }
     }
 
-    func stop() {
-        flushWorkItem?.cancel()
-        flushWorkItem = nil
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        task?.cancel()
-        request = nil
-        task = nil
-        partial = ""
-        emittedPrefixLength = 0
-        isRunning = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-
-    func clear() {
-        segments.removeAll()
-        partial = ""
-    }
-
-    /// Called by the view once a phrase has been translated.
-    func setTranslation(_ text: String, for id: UUID) {
-        guard let index = segments.firstIndex(where: { $0.id == id }) else { return }
-        segments[index].translated = text
-    }
-
-    func segment(_ id: UUID) -> TranslatedSegment? {
-        segments.first { $0.id == id }
-    }
-
-    // MARK: Recognition
-
-    private func startTask() throws {
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        // On-device keeps the audio on the phone and, more to the point here, removes a network
-        // round trip from every partial result.
-        if recognizer?.supportsOnDeviceRecognition == true {
-            request.requiresOnDeviceRecognition = true
-        }
-        self.request = request
-        emittedPrefixLength = 0
-
-        let input = audioEngine.inputNode
-        let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { throw TranslatorError.noMicrophone }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
-        }
-        audioEngine.prepare()
-        try audioEngine.start()
-
-        task = recognizer?.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            Task { @MainActor in
-                if let result {
-                    self.handle(transcript: result.bestTranscription.formattedString,
-                                isFinal: result.isFinal)
-                }
-                if error != nil || result?.isFinal == true {
-                    self.restartIfRunning()
-                }
-            }
+    var detail: String {
+        switch self {
+        case .fastest: return "Starts talking after ~1s. Choppier, and reorders badly in German."
+        case .balanced: return "About 2 seconds behind. The default."
+        case .accurate: return "Waits ~3.5s for whole clauses. Best wording, most lag."
         }
     }
 
-    private func handle(transcript: String, isFinal: Bool) {
-        let full = transcript
-        let start = full.index(full.startIndex, offsetBy: min(emittedPrefixLength, full.count))
-        let fresh = String(full[start...]).trimmingCharacters(in: .whitespaces)
-        partial = fresh
-
-        flushWorkItem?.cancel()
-        // A sentence-ending mark means they're done -- no reason to sit out the pause timer.
-        if isFinal || fresh.hasSuffix(".") || fresh.hasSuffix("?") || fresh.hasSuffix("!")
-            || fresh.hasSuffix("。") || fresh.hasSuffix("？") || fresh.hasSuffix("！") {
-            flush(fresh, totalLength: full.count)
-            return
-        }
-        guard !fresh.isEmpty else { return }
-        let work = DispatchWorkItem { [weak self] in
-            self?.flush(fresh, totalLength: full.count)
-        }
-        flushWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + phraseGap, execute: work)
-    }
-
-    private func flush(_ text: String, totalLength: Int) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        emittedPrefixLength = totalLength
-        partial = ""
-        let segment = TranslatedSegment(original: trimmed, translated: nil)
-        segments.append(segment)
-        phraseContinuation?.yield(segment.id)
-    }
-
-    /// iOS ends a recognition request after a while on its own. Restart transparently so a long
-    /// conversation doesn't quietly stop being translated halfway through.
-    private func restartIfRunning() {
-        guard isRunning else { return }
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        request = nil
-        task = nil
-        do {
-            try startTask()
-        } catch {
-            errorText = error.localizedDescription
-            stop()
+    var chunkWords: Int {
+        switch self {
+        case .fastest: return 4
+        case .balanced: return 6
+        case .accurate: return 10
         }
     }
 
-    private func requestPermissions() async -> Bool {
-        let speech = await withCheckedContinuation { c in
-            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
+    var maxHold: TimeInterval {
+        switch self {
+        case .fastest: return 1.0
+        case .balanced: return 2.0
+        case .accurate: return 3.5
         }
-        guard speech == .authorized else { return false }
-        return await withCheckedContinuation { c in
-            AVAudioSession.sharedInstance().requestRecordPermission { c.resume(returning: $0) }
-        }
-    }
-
-    enum TranslatorError: LocalizedError {
-        case noMicrophone
-        var errorDescription: String? { "No usable microphone input." }
     }
 }
 
@@ -290,29 +122,30 @@ final class LiveTranslatorEngine: ObservableObject {
 
 struct LiveTranslatorView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var engine = LiveTranslatorEngine()
-    @StateObject private var speech = SpeechSynthesizer.shared
-
+    @StateObject private var interpreter = SimultaneousInterpreter()
     @StateObject private var llm = LocalLLMTranslator.shared
 
     @AppStorage("translatorSource") private var sourceId = "en-US"
     @AppStorage("translatorTarget") private var targetId = "ru-RU"
     @AppStorage("translatorSpeaks") private var speakAloud = true
     @AppStorage("translatorEngine") private var engineRaw = TranslatorEngine.apple.rawValue
+    @AppStorage("translatorPace") private var paceRaw = InterpreterPace.balanced.rawValue
 
     @State private var configuration: TranslationSession.Configuration?
     @State private var isDownloadingModel = false
     @State private var showEngineSheet = false
-
-    private var translationEngine: TranslatorEngine {
-        TranslatorEngine(rawValue: engineRaw) ?? .apple
-    }
 
     private var source: TranslatorLanguage {
         TranslatorLanguage.sources.first { $0.id == sourceId } ?? TranslatorLanguage.sources[0]
     }
     private var target: TranslatorLanguage {
         TranslatorLanguage.targets.first { $0.id == targetId } ?? TranslatorLanguage.targets[0]
+    }
+    private var translationEngine: TranslatorEngine {
+        TranslatorEngine(rawValue: engineRaw) ?? .apple
+    }
+    private var pace: InterpreterPace {
+        InterpreterPace(rawValue: paceRaw) ?? .balanced
     }
 
     var body: some View {
@@ -329,53 +162,63 @@ struct LiveTranslatorView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
-                        engine.stop()
-                        speech.stop()
+                        interpreter.stop()
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        engine.clear()
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .disabled(engine.segments.isEmpty)
+                    Button { interpreter.clear() } label: { Image(systemName: "trash") }
+                        .disabled(interpreter.chunks.isEmpty)
                 }
             }
-            // The session is vended by SwiftUI; the engine pushes finished phrases through the
-            // stream below and each translation lands back on its own segment.
+            // SwiftUI vends the Apple translation session only through this modifier, so the whole
+            // chunk pump lives inside it regardless of which engine is selected.
             .translationTask(configuration) { session in
                 do {
-                    // Only Apple's path needs a language pack. Preparing unconditionally asked a
-                    // Qwen3 user to download one they will never use -- and the phrase pump lives
-                    // inside this task either way, so the session simply goes unused instead.
+                    // Only Apple's path needs a language pack; preparing unconditionally asked a
+                    // Qwen3 user to download one they will never use.
                     if translationEngine == .apple {
                         try await session.prepareTranslation()
                     }
-                    for await id in engine.phrases {
-                        guard let segment = engine.segment(id) else { continue }
+                    for await id in interpreter.pending {
+                        guard let chunk = interpreter.chunk(id) else { continue }
                         let text: String
                         switch translationEngine {
                         case .apple:
-                            text = try await session.translate(segment.original).targetText
+                            text = try await session.translate(chunk.original).targetText
                         case .localLLM:
                             text = try await llm.translate(
-                                segment.original,
+                                chunk.original,
                                 from: source.name, to: target.name,
-                                recentContext: engine.segments.compactMap(\.translated).suffix(3).map { $0 })
+                                recentContext: interpreter.chunks.compactMap(\.translated).suffix(3).map { $0 },
+                                isFragment: true)
                         }
-                        engine.setTranslation(text, for: id)
-                        if speakAloud { speech.speak(text) }
+                        interpreter.complete(id, with: text, language: target.id, speak: speakAloud)
                     }
                 } catch {
-                    engine.errorText = error.localizedDescription
+                    interpreter.errorText = error.localizedDescription
                 }
             }
             .sheet(isPresented: $showEngineSheet) { engineSheet }
             .task(id: "\(sourceId)-\(targetId)") { await refreshConfiguration() }
+            .onChange(of: paceRaw) { _, _ in applyPace() }
+            .onAppear { applyPace() }
+            // Loading multi-GB weights takes tens of seconds. Doing it now, while the user is still
+            // choosing languages, keeps it off the first chunk of a live conversation.
+            .task(id: engineRaw) {
+                if translationEngine == .localLLM, llm.isDownloaded, !llm.isModelLoaded {
+                    try? await llm.connect()
+                }
+            }
         }
     }
+
+    private func applyPace() {
+        interpreter.chunkWords = pace.chunkWords
+        interpreter.maxHold = pace.maxHold
+    }
+
+    // MARK: Language bar
 
     private var languageBar: some View {
         HStack(spacing: 10) {
@@ -405,9 +248,7 @@ struct LiveTranslatorView: View {
 
     private func languageChip(_ title: String, caption: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(caption)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            Text(caption).font(.caption2).foregroundStyle(.tertiary)
             HStack(spacing: 4) {
                 Text(title).font(.subheadline.weight(.semibold))
                 Image(systemName: "chevron.down").font(.caption2.weight(.bold))
@@ -420,33 +261,37 @@ struct LiveTranslatorView: View {
         .background(Color.appSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    // MARK: Transcript
+
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if engine.segments.isEmpty && !engine.isRunning {
-                        idleHint.padding(.top, 50)
+                    if interpreter.chunks.isEmpty && !interpreter.isRunning {
+                        idleHint.padding(.top, 40)
                     }
-                    ForEach(engine.segments) { segment in
+                    ForEach(interpreter.chunks) { chunk in
                         VStack(alignment: .leading, spacing: 4) {
                             // Translation first and largest: it is what the user is here for.
-                            Text(segment.translated ?? "…")
+                            Text(chunk.translated ?? "…")
                                 .font(.title3.weight(.medium))
-                                .foregroundStyle(segment.translated == nil ? .secondary : .primary)
-                            Text(segment.original)
+                                .foregroundStyle(chunk.translated == nil ? .secondary : .primary)
+                            Text(chunk.original)
                                 .font(.footnote)
                                 .foregroundStyle(.tertiary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .id(segment.id)
+                        .id(chunk.id)
                     }
-                    if !engine.partial.isEmpty {
-                        Text(engine.partial)
+                    // Words heard but not settled yet. Shown so the screen visibly reacts to speech
+                    // between commits rather than looking stalled.
+                    if !interpreter.inFlight.isEmpty {
+                        Text(interpreter.inFlight)
                             .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .id("partial")
+                            .foregroundStyle(.quaternary)
+                            .id("inflight")
                     }
-                    if let errorText = engine.errorText {
+                    if let errorText = interpreter.errorText {
                         Label(errorText, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
@@ -456,9 +301,9 @@ struct LiveTranslatorView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             }
-            .onChange(of: engine.segments.count) { _, _ in
+            .onChange(of: interpreter.chunks.count) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(engine.segments.last?.id, anchor: .bottom)
+                    proxy.scrollTo(interpreter.chunks.last?.id, anchor: .bottom)
                 }
             }
         }
@@ -471,18 +316,38 @@ struct LiveTranslatorView: View {
                 .foregroundStyle(.tertiary)
             Text("Point the phone at whoever is talking")
                 .font(.headline)
-            Text("Everything runs on this phone — no network, no account. The first use of a "
-                 + "language downloads its pack once.")
+            Text("Translation starts a couple of seconds in and keeps going while they talk — you "
+                 + "don't wait for them to finish. Everything runs on this phone, with no network.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 30)
+                .padding(.horizontal, 28)
+            Label("Wear the glasses or earphones — otherwise the phone hears its own voice",
+                  systemImage: "ear.badge.waveform")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: Controls
+
     private var controls: some View {
         VStack(spacing: 12) {
+            Picker("Pace", selection: $paceRaw) {
+                ForEach(InterpreterPace.allCases) { Text($0.label).tag($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .disabled(interpreter.isRunning)
+
+            Text(pace.detail)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             Button {
                 showEngineSheet = true
             } label: {
@@ -491,39 +356,39 @@ struct LiveTranslatorView: View {
                     Text(translationEngine.label)
                     if translationEngine == .localLLM && !llm.isDownloaded {
                         Text("— not downloaded").foregroundStyle(.orange)
+                    } else if translationEngine == .localLLM && llm.isLoadingModel {
+                        ProgressView().controlSize(.mini)
                     }
                     Spacer()
-                    Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
                 }
                 .font(.subheadline)
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 4)
 
             Toggle(isOn: $speakAloud) {
-                Label("Speak the translation aloud", systemImage: "ear")
+                Label("Speak into my ear", systemImage: "ear")
                     .font(.subheadline)
             }
-            .padding(.horizontal, 4)
 
             Button {
                 Task {
-                    if engine.isRunning {
-                        engine.stop()
-                        speech.stop()
+                    if interpreter.isRunning {
+                        interpreter.stop()
                     } else {
-                        await engine.start(source: source)
+                        await interpreter.start(source: source)
                     }
                 }
             } label: {
-                Label(engine.isRunning ? "Stop" : "Start listening",
-                      systemImage: engine.isRunning ? "stop.fill" : "mic.fill")
+                Label(interpreter.isRunning ? "Stop" : "Start interpreting",
+                      systemImage: interpreter.isRunning ? "stop.fill" : "mic.fill")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
             }
             .buttonStyle(.borderedProminent)
-            .tint(engine.isRunning ? .red : .accentColor)
+            .tint(interpreter.isRunning ? .red : .accentColor)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
@@ -531,10 +396,10 @@ struct LiveTranslatorView: View {
         .background(.bar)
     }
 
+    // MARK: Engine sheet
 
-    /// Engine picker plus the download that the local model needs. Kept on the translator screen
-    /// rather than in Settings: it is only ever relevant while standing here deciding whether the
-    /// translation is good enough.
+    /// Engine picker plus the download the local model needs. It lives here rather than in Settings
+    /// because it is only ever relevant while standing on this screen judging the translation.
     private var engineSheet: some View {
         NavigationStack {
             Form {
@@ -560,10 +425,7 @@ struct LiveTranslatorView: View {
 
                 if translationEngine == .localLLM {
                     Section {
-                        Picker("Model", selection: Binding(
-                            get: { llm.tier },
-                            set: { llm.tier = $0 }
-                        )) {
+                        Picker("Model", selection: Binding(get: { llm.tier }, set: { llm.tier = $0 })) {
                             ForEach(TranslatorModelTier.allCases) { tier in
                                 Text("\(tier.label) · \(tier.sizeText)").tag(tier)
                             }
@@ -589,7 +451,7 @@ struct LiveTranslatorView: View {
                                 isDownloadingModel = true
                                 Task {
                                     do { try await llm.download { _ in } }
-                                    catch { engine.errorText = error.localizedDescription }
+                                    catch { interpreter.errorText = error.localizedDescription }
                                     isDownloadingModel = false
                                 }
                             } label: {
@@ -599,9 +461,22 @@ struct LiveTranslatorView: View {
                     } header: {
                         Text("On-device model")
                     } footer: {
-                        Text("Downloads once over Wi-Fi, then works with no network at all. "
-                             + "The larger model translates better; the smaller one answers sooner.")
+                        Text("Downloads once over Wi-Fi, then works with no network at all. The "
+                             + "larger model translates better; the smaller one answers sooner, "
+                             + "which matters more here than in a chat.")
                     }
+                }
+
+                Section {
+                    Label(interpreter.echoCancellationActive
+                          ? "Echo cancellation on" : "Echo cancellation unavailable",
+                          systemImage: interpreter.echoCancellationActive ? "checkmark.circle" : "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(interpreter.echoCancellationActive ? .green : .secondary)
+                } footer: {
+                    Text("The translation plays while the other person is still talking, so the "
+                         + "microphone would otherwise pick up this phone's own voice. Wearing the "
+                         + "glasses or earphones removes the problem entirely.")
                 }
             }
             .navigationTitle("Translation engine")
@@ -614,21 +489,18 @@ struct LiveTranslatorView: View {
         }
     }
 
-    /// Rebuilds the translation configuration when either language changes, which is also what
-    /// triggers the language-pack download prompt the first time a pair is used.
+    /// Rebuilds the Apple translation configuration when either language changes; building it is
+    /// also what prompts for the language pack the first time a pair is used.
     private func refreshConfiguration() async {
-        let availability = LanguageAvailability()
-        let status = await availability.status(from: source.translationLanguage,
-                                               to: target.translationLanguage)
-        // .supported means iOS can do this pair but hasn't downloaded the pack yet; building the
-        // configuration is what prompts for it, so it needs no separate flag or branch.
+        let status = await LanguageAvailability().status(from: source.translationLanguage,
+                                                         to: target.translationLanguage)
         if status == .unsupported, translationEngine == .apple {
-            engine.errorText = "\(source.name) → \(target.name) isn't a pair Apple Translate "
+            interpreter.errorText = "\(source.name) → \(target.name) isn't a pair Apple Translate "
                 + "handles. Switch the translator to Qwen3 below."
             configuration = nil
             return
         }
-        engine.errorText = nil
+        interpreter.errorText = nil
         configuration = TranslationSession.Configuration(
             source: source.translationLanguage,
             target: target.translationLanguage

@@ -50,6 +50,7 @@
 		EF1F65969A477C67301427D6 /* GigaChatService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 186A75007A13A6FE2FA66687 /* GigaChatService.swift */; };
 		C4E81A730B9D26F5A1073FEC /* LiveTranslatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */; };
 		F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */; };
+		6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */; };
 		A31C7E5048B2F09D6C41DA77 /* GigaChatDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7409D22E5163CA84F80B215 /* GigaChatDiagnostics.swift */; };
 		D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */; };
 		5D7F2712092B574D9E4B558B /* russian_trusted_root_ca.pem in Resources */ = {isa = PBXBuildFile; fileRef = C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */; };
@@ -128,6 +129,7 @@
 		186A75007A13A6FE2FA66687 /* GigaChatService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatService.swift; sourceTree = "<group>"; };
 		D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslatorView.swift; sourceTree = "<group>"; };
 		8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMTranslator.swift; sourceTree = "<group>"; };
+		A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimultaneousInterpreter.swift; sourceTree = "<group>"; };
 		B7409D22E5163CA84F80B215 /* GigaChatDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatDiagnostics.swift; sourceTree = "<group>"; };
 		28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatSettingsView.swift; sourceTree = "<group>"; };
 		C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */ = {isa = PBXFileReference; lastKnownFileType = text; path = russian_trusted_root_ca.pem; sourceTree = "<group>"; };
@@ -344,6 +346,7 @@
 			children = (
 				D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */,
 				8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */,
+				A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */,
 			);
 			path = Translator;
 			sourceTree = "<group>";
@@ -496,6 +499,7 @@
 				EF1F65969A477C67301427D6 /* GigaChatService.swift in Sources */,
 				C4E81A730B9D26F5A1073FEC /* LiveTranslatorView.swift in Sources */,
 				F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */,
+				6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */,
 				A31C7E5048B2F09D6C41DA77 /* GigaChatDiagnostics.swift in Sources */,
 				D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */,
 				11FD173E69C64E17E0137C1C /* YandexGPTService.swift in Sources */,

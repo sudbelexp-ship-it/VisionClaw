@@ -1,5 +1,6 @@
 import LiveKit
 import SwiftUI
+import UIKit
 import WebKit
 
 /// Phone-mode main screen under LiveKit: camera preview, a gear, a call
@@ -13,15 +14,26 @@ struct LiveKitStreamView: View {
   var glassesPlaceholder: (title: String, caption: String)? = nil
   @State private var showSettings = false
   @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
+  @State private var showShareSheet = false
+  @State private var savedConfirmation = false
 
-  // Quick glasses/phone source switch on the call screen. Flips the shared
-  // capture-source setting; StreamSessionView's onChange swaps the pipeline.
-  // A single highlight bubble slides between the two slots (phone at index 0,
-  // glasses at index 1) with a spring, so tap and swipe both animate.
+  private func icon(for source: CaptureSource) -> String {
+    switch source {
+    case .iPhoneCamera: return "iphone"
+    case .glasses: return "eyeglasses"
+    case .audioOnly: return "waveform"
+    }
+  }
+
+  // Quick source switch on the call screen (phone / glasses / audio-only).
+  // Flips the shared capture-source setting; StreamSessionView's onChange
+  // swaps the pipeline. A single highlight bubble slides between the slots
+  // (declaration order: phone, glasses, audio-only) with a spring, so tap
+  // and swipe both animate.
   private var captureSourceToggle: some View {
     let itemWidth: CGFloat = 42
     let itemHeight: CGFloat = 30
-    let selectedIndex = captureSourceRaw == CaptureSource.glasses.rawValue ? 1 : 0
+    let selectedIndex = CaptureSource.allCases.firstIndex { $0.rawValue == captureSourceRaw } ?? 0
     return ZStack(alignment: .leading) {
       Capsule()
         .fill(.white.opacity(0.18))
@@ -30,7 +42,7 @@ struct LiveKitStreamView: View {
       HStack(spacing: 0) {
         ForEach(CaptureSource.allCases, id: \.rawValue) { source in
           Button { captureSourceRaw = source.rawValue } label: {
-            Image(systemName: source == .glasses ? "eyeglasses" : "iphone")
+            Image(systemName: icon(for: source))
               .font(.system(size: 15, weight: .medium))
               .foregroundStyle(captureSourceRaw == source.rawValue ? .white : .white.opacity(0.4))
               .frame(width: itemWidth, height: itemHeight)
@@ -72,6 +84,17 @@ struct LiveKitStreamView: View {
                 .padding(.leading, 16)
             }
           }
+      } else if captureSourceRaw == CaptureSource.audioOnly.rawValue {
+        // No camera at all in this mode -- a plain "listening" placeholder
+        // instead of an unexplained black screen.
+        VStack(spacing: 12) {
+          Image(systemName: "waveform")
+            .font(.system(size: 40))
+            .foregroundStyle(.white.opacity(0.6))
+          Text("Audio only")
+            .font(.subheadline)
+            .foregroundStyle(.white.opacity(0.6))
+        }
       }
       // Suppressed while connecting, establishing video, or failed: those
       // states own the centered spot with their own message, so the two never
@@ -114,11 +137,13 @@ struct LiveKitStreamView: View {
       // Pinned frame floats as a card over the still-live view: the user keeps
       // their bearings, and the caption doubles as the release affordance.
       // The model is seeing nothing newer than this frame, so screen and model
-      // agree on what "this" means.
+      // agree on what "this" means. Also doubles as the photo preview: Save /
+      // Share act on this exact pinned image; tapping the dimmed background
+      // (not the card itself) is the "Cancel" -- back to live, nothing kept.
       if let frozen = session.frozenFrame {
         Color.black.opacity(0.55)
           .edgesIgnoringSafeArea(.all)
-          .onTapGesture { Task { await session.unfreeze() } }
+          .onTapGesture { Task { await session.unfreeze() }; savedConfirmation = false }
         VStack(spacing: 16) {
           Image(uiImage: frozen)
             .resizable()
@@ -127,11 +152,39 @@ struct LiveKitStreamView: View {
             .clipShape(RoundedRectangle(cornerRadius: 20))
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.9), lineWidth: 2))
             .shadow(radius: 18)
-          Text("Tap anywhere to return to live")
-            .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.85))
+          if savedConfirmation {
+            Label("Saved to Photos", systemImage: "checkmark.circle.fill")
+              .font(.subheadline.weight(.semibold))
+              .foregroundStyle(.green)
+          } else {
+            HStack(spacing: 28) {
+              Button {
+                UIImageWriteToSavedPhotosAlbum(frozen, nil, nil, nil)
+                withAnimation { savedConfirmation = true }
+              } label: {
+                VStack(spacing: 4) {
+                  Image(systemName: "square.and.arrow.down.fill").font(.title2)
+                  Text("Save").font(.caption)
+                }
+              }
+              Button { showShareSheet = true } label: {
+                VStack(spacing: 4) {
+                  Image(systemName: "square.and.arrow.up.fill").font(.title2)
+                  Text("Share").font(.caption)
+                }
+              }
+              Button { Task { await session.unfreeze() }; savedConfirmation = false } label: {
+                VStack(spacing: 4) {
+                  Image(systemName: "xmark.circle.fill").font(.title2)
+                  Text("Cancel").font(.caption)
+                }
+              }
+            }
+            .foregroundStyle(.white)
+            .buttonStyle(.plain)
+          }
         }
-        .allowsHitTesting(false)
+        .sheet(isPresented: $showShareSheet) { ShareSheet(photo: frozen) }
       }
 
       // Agent liveness, top and center: a call can connect perfectly and still
@@ -197,11 +250,31 @@ struct LiveKitStreamView: View {
         Spacer()
         ZStack {
           // Shutter front and center: pinning what you see is the primary act.
-          FreezeButton(session: session)
+          // No video at all in audio-only -- nothing to pin, so the shutter
+          // is simply absent rather than a button that does nothing.
+          if captureSourceRaw != CaptureSource.audioOnly.rawValue {
+            FreezeButton(session: session)
+          }
           HStack {
             LiveKitCallButton(session: session, compact: true)
               .padding(.leading, 24)
             Spacer()
+            HStack(spacing: 12) {
+              // Front/back swap -- iPhone camera only; glasses have one lens,
+              // and audio-only has no camera to flip.
+              if captureSourceRaw == CaptureSource.iPhoneCamera.rawValue {
+                RoundIconButton(icon: "arrow.triangle.2.circlepath.camera.fill") {
+                  Task { await session.switchCamera() }
+                }
+              }
+              RoundIconButton(
+                icon: session.isMicMuted ? "mic.slash.fill" : "mic.fill",
+                tint: session.isMicMuted ? .red : .white
+              ) {
+                Task { await session.toggleMicMute() }
+              }
+            }
+            .padding(.trailing, 24)
           }
         }
         .padding(.bottom, 24)
@@ -209,9 +282,9 @@ struct LiveKitStreamView: View {
     }
     .simultaneousGesture(
       // Directional and edge-bounded, paging convention: swipe left pages to
-      // the mode on the right (glasses), swipe right pages to the mode on the
-      // left (phone). At an edge, swiping further off it reselects the same
-      // mode instead of wrapping, so a repeated swipe never flip-flops.
+      // the next mode (declaration order: phone, glasses, audio-only), swipe
+      // right pages to the previous one. At an edge, swiping further off it
+      // stays put instead of wrapping, so a repeated swipe never flip-flops.
       DragGesture(minimumDistance: 40)
         .onEnded { value in
           // Never flip the source mid-transition. A swipe landing during the
@@ -221,9 +294,11 @@ struct LiveKitStreamView: View {
           guard session.state != .connecting, !session.videoEstablishing else { return }
           guard abs(value.translation.width) > abs(value.translation.height),
                 abs(value.translation.width) > 60 else { return }
-          captureSourceRaw = value.translation.width < 0
-            ? CaptureSource.glasses.rawValue
-            : CaptureSource.iPhoneCamera.rawValue
+          let all = CaptureSource.allCases
+          let current = all.firstIndex { $0.rawValue == captureSourceRaw } ?? 0
+          let next = value.translation.width < 0 ? current + 1 : current - 1
+          guard all.indices.contains(next) else { return }
+          captureSourceRaw = all[next].rawValue
         }
     )
     .sheet(isPresented: $showSettings) { SettingsView() }
@@ -438,6 +513,24 @@ struct LiveKitCallButton: View {
       }
     }
     .disabled(session.state == .connecting)
+  }
+}
+
+/// Small dark-circle icon button matching the gear button's look -- used for
+/// the mic-mute and camera-flip controls.
+struct RoundIconButton: View {
+  let icon: String
+  var tint: Color = .white
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: icon)
+        .font(.system(size: 16, weight: .medium))
+        .foregroundStyle(tint)
+        .frame(width: 40, height: 40)
+        .background(.black.opacity(0.35), in: Circle())
+    }
   }
 }
 

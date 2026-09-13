@@ -66,7 +66,9 @@ struct StreamSessionView: View {
         // StreamSessionViewModel, so it rides along even though its LiveKit-facing state
         // (isStreaming etc.) otherwise goes unused on this path.
         AskAssistantView(streamViewModel: viewModel)
-      } else if captureSource == .iPhoneCamera {
+      } else if captureSource != .glasses {
+        // iPhone camera or audio-only -- both skip the DAT/wearables flow entirely and go
+        // straight to the call screen; LiveKitSession itself decides whether to publish video.
         LiveKitStreamView(session: liveKit)
       } else if viewModel.isStreaming {
         // Glasses are just another camera: same call screen, same agent, with
@@ -105,7 +107,7 @@ struct StreamSessionView: View {
       viewModel.onDecodedFrame = { [weak liveKit] pixelBuffer in
         liveKit?.pushGlassesFrame(pixelBuffer)
       }
-      if captureSource == .iPhoneCamera && !intelligenceEngine.isDirect {
+      if captureSource != .glasses && !intelligenceEngine.isDirect {
         await liveKit.start()
       }
     }
@@ -142,7 +144,7 @@ struct StreamSessionView: View {
         } else if liveKit.isActive {
           await liveKit.stop()
           await liveKit.start()
-        } else if captureSource == .iPhoneCamera {
+        } else if captureSource != .glasses {
           await liveKit.start()
         }
       }
@@ -154,7 +156,7 @@ struct StreamSessionView: View {
           // AskAssistantView owns photo capture directly; no LiveKit room to swap.
           return
         }
-        if CaptureSource(rawValue: newRaw) == .iPhoneCamera {
+        if CaptureSource(rawValue: newRaw) != .glasses {
           if viewModel.isStreaming { await viewModel.stopSession() }
           await liveKit.start()
         } else {

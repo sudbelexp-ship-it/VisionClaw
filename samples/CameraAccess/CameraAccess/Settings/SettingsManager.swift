@@ -53,6 +53,10 @@ enum IntelligenceEngine: String, CaseIterable {
 enum CaptureSource: String, CaseIterable {
   case iPhoneCamera = "iphone"
   case glasses = "glasses"
+  /// Voice only -- no camera track published at all (LiveKitSession.start() skips camera setup
+  /// entirely, the same way it already degrades to voice-only on a camera failure). For when you
+  /// just want to talk, with no video overhead or camera permission needed.
+  case audioOnly = "audio"
 
   static let defaultsKey = "captureSource"
 
@@ -60,6 +64,7 @@ enum CaptureSource: String, CaseIterable {
     switch self {
     case .iPhoneCamera: return "iPhone Camera"
     case .glasses: return "Glasses"
+    case .audioOnly: return "Audio Only"
     }
   }
 }

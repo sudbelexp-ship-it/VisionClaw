@@ -160,6 +160,8 @@ struct AskAssistantView: View {
             showCameraCapture = true
         case .glasses:
             await captureGlassesPhoto()
+        case .audioOnly:
+            errorMessage = "No camera in Audio Only mode. Switch source in Settings to attach a photo."
         }
     }
 

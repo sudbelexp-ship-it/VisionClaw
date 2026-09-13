@@ -179,6 +179,37 @@ final class LiveKitSession: NSObject, ObservableObject {
     }
   }
 
+  // MARK: - Microphone mute
+
+  /// Mic mute during an active call -- independent of freeze (which mutes VIDEO). Reset on every
+  /// fresh start() so a call never silently begins muted from a forgotten previous one.
+  @Published private(set) var isMicMuted = false
+
+  func toggleMicMute() async {
+    guard state == .connected else { return }
+    let target = !isMicMuted
+    do {
+      try await room.localParticipant.setMicrophone(enabled: !target)
+      isMicMuted = target
+    } catch {
+      NSLog("[LiveKit] mic mute toggle failed: %@", error.localizedDescription)
+    }
+  }
+
+  // MARK: - Camera position
+
+  /// Front/back swap -- iPhone camera only; glasses have one lens. Works on either the live call
+  /// track or the idle preview track, whichever is actually running.
+  func switchCamera() async {
+    guard !usingGlassesSource else { return }
+    guard let capturer = (localVideoTrack ?? previewTrack)?.capturer as? CameraCapturer else { return }
+    do {
+      _ = try await capturer.switchCameraPosition()
+    } catch {
+      NSLog("[LiveKit] camera switch failed: %@", error.localizedDescription)
+    }
+  }
+
   // MARK: - Zoom
 
   /// Optical-then-digital zoom applied at the sensor through whichever camera
@@ -220,6 +251,8 @@ final class LiveKitSession: NSObject, ObservableObject {
   /// between calls. Handed off to the room on connect (one owner at a time).
   func startPreview() async {
     guard state == .disconnected || isFailed, previewTrack == nil else { return }
+    // Audio-only has no camera at all -- nothing to preview.
+    guard SettingsManager.shared.captureSource != .audioOnly else { return }
     let track: LocalVideoTrack
     if SettingsManager.shared.captureSource == .glasses {
       // Glasses preview is a buffer track fed by pushGlassesFrame; there is
@@ -366,9 +399,12 @@ final class LiveKitSession: NSObject, ObservableObject {
         }
       }
       // Camera failure (simulator, permission denied) degrades to voice-only
-      // rather than killing the call.
+      // rather than killing the call. Audio-only deliberately never enables a
+      // camera at all -- same end state as that failure path, just on purpose.
       do {
-        if usingGlassesSource {
+        if SettingsManager.shared.captureSource == .audioOnly {
+          // Nothing to do: no camera, no video track, no grabber.
+        } else if usingGlassesSource {
           // Glasses frames arrive via pushGlassesFrame; a buffer track with
           // camera source keeps mute/freeze/agent logic identical.
           // reportStatistics enables the per-second outbound-rtp stats poll so
@@ -522,6 +558,7 @@ final class LiveKitSession: NSObject, ObservableObject {
     agentStatus = .none
     resetZoom()
     frozenFrame = nil
+    isMicMuted = false
     caption = nil
     captionClearTask?.cancel()
     card = nil

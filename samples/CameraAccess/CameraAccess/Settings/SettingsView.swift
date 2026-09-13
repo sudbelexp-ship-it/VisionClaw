@@ -52,6 +52,14 @@ struct SettingsView: View {
   @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.openai.rawValue
   @AppStorage(SettingsManager.showCaptionsKey) private var showCaptions = true
 
+  private var cameraFooter: String {
+    switch CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera {
+    case .glasses: return "Streams from your Meta glasses. Connecting them happens on the main screen."
+    case .iPhoneCamera: return "Uses this phone's camera. The app opens straight into it, with voice ready."
+    case .audioOnly: return "Voice only, no camera at all -- lowest overhead, quickest to start."
+    }
+  }
+
   private var intelligenceFooter: String {
     switch IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai {
     case .openai: return "OpenAI gpt-realtime. Applies to the next call."
@@ -65,9 +73,7 @@ struct SettingsView: View {
   var body: some View {
     NavigationView {
       Form {
-        Section(header: Text("Camera"), footer: Text(captureSourceRaw == CaptureSource.glasses.rawValue
-          ? "Streams from your Meta glasses. Connecting them happens on the main screen."
-          : "Uses this phone's camera. The app opens straight into it, with voice ready.")) {
+        Section(header: Text("Camera"), footer: Text(cameraFooter)) {
           Picker("Source", selection: $captureSourceRaw) {
             ForEach(CaptureSource.allCases, id: \.rawValue) { source in
               Text(source.label).tag(source.rawValue)

@@ -29,6 +29,8 @@ final class SpeechRecognizerOneShot: ObservableObject {
     /// "the microphone handed us pure silence", which have completely different fixes.
     private var peakLevel: Float = 0
     private var sawAnyResult = false
+    /// Закреплённая часть: черновой хвост дописывается к ней, а не к самому себе.
+    private var finalizedPrefix = ""
 
     /// The language dictation should listen for: an explicit choice in Settings, otherwise the
     /// phone's own first preferred language.
@@ -56,6 +58,7 @@ final class SpeechRecognizerOneShot: ObservableObject {
         guard await requestMicrophoneAuthorization() else { throw SpeechError.notAuthorized }
 
         transcript = ""
+        finalizedPrefix = ""
         peakLevel = 0
         sawAnyResult = false
 
@@ -63,15 +66,22 @@ final class SpeechRecognizerOneShot: ObservableObject {
         // and the hands-free assistant may already be holding it. Two engines meant whichever
         // started second silently recorded nothing.
         do {
-            listener = try AudioCaptureHub.shared.addListener(
+            listener = try await AudioCaptureHub.shared.addListener(
                 locale: Self.activeLocale(),
-                onTranscript: { [weak self] text, isFinal in
-                    guard let self else { return }
-                    if !text.isEmpty {
-                        self.sawAnyResult = true
-                        self.transcript = text
-                    }
-                    if isFinal { self.finish(error: nil) }
+                onFinal: { [weak self] text in
+                    guard let self, !text.isEmpty else { return }
+                    self.sawAnyResult = true
+                    // Закреплённые куски приходят по одному, а поле должно показывать всё сказанное
+                    // за нажатие, поэтому они склеиваются.
+                    self.finalizedPrefix = self.finalizedPrefix.isEmpty
+                        ? text : self.finalizedPrefix + " " + text
+                    self.transcript = self.finalizedPrefix
+                },
+                onVolatile: { [weak self] text in
+                    guard let self, !text.isEmpty else { return }
+                    self.sawAnyResult = true
+                    self.transcript = self.finalizedPrefix.isEmpty
+                        ? text : self.finalizedPrefix + " " + text
                 },
                 onLevel: { [weak self] rms, _ in
                     self?.peakLevel = max(self?.peakLevel ?? 0, rms)

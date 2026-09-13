@@ -121,6 +121,22 @@ struct SettingsView: View {
                 if let error = assistant.lastError {
                     StatusLine(kind: .warning, text: error)
                 }
+                // Живая проверка. Скажите что-нибудь и посмотрите сюда: если текст не появляется,
+                // дело в микрофоне или языке, а не во фразе; если появляется, но на другом языке —
+                // меняйте язык распознавания ниже.
+                if assistant.isListening {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Слышу").font(.caption2).foregroundStyle(.tertiary)
+                        Text(assistant.heard.isEmpty ? "—" : assistant.heard)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    if let at = assistant.lastTriggerAt {
+                        StatusLine(kind: .good,
+                                   text: "Фраза сработала \(at.formatted(date: .omitted, time: .standard))")
+                    }
+                }
             }
         } header: {
             Text("Голосовой ассистент")

@@ -136,28 +136,20 @@ final class SimultaneousInterpreter: ObservableObject {
     /// glasses app "why is it talking out of the phone" is the first thing anyone asks.
     var outputRouteName: String { AudioCaptureHub.shared.outputRouteName }
 
-    /// How long a gap in speech counts as the speaker finishing a thought. The one knob that
-    /// matters: too short and it cuts inside sentences again, too long and the interpreter lags.
-    var pauseSeconds: Double = 0.55
-    /// Safety valve for speech with no real pauses at all (someone reading aloud). Generous on
-    /// purpose -- it exists so the delay stays bounded, not to do the cutting.
-    var runawayWords = 40
-    /// 1.5x. The interpreter always starts behind the speaker and must make the time back inside
-    /// each segment, or the gap grows for the whole conversation.
-    var speechRate: Float = AVSpeechUtteranceDefaultSpeechRate * 1.5
+    /// Сколько ждать соседнюю фразу, чтобы отправить их вместе. 0 — отправлять сразу.
+    var joinWindow: TimeInterval = 1.0
+    /// Темп берётся из общей настройки — ползунок на экране меняет его на лету. По умолчанию
+    /// 1.5x: переводчик всегда стартует позади говорящего и должен отыгрывать разрыв внутри
+    /// каждого отрезка, иначе отставание копится весь разговор.
+    var speechRate: Float { SpeechSynthesizer.shared.utteranceRate }
 
     private let voice = InterpreterVoice()
     private var listener: AudioCaptureHub.Listener?
 
-    /// The most recent transcript of the running recognition task, as words.
-    private var lastHypothesis: [String] = []
-    /// Running estimate of the room's background level, for the pause detector.
-    private var noiseFloor: Float = 0.01
-    private var silenceSeconds: Double = 0
-    /// Whether anything was actually said since the last cut, so silence alone can't emit.
-    private var hadSpeechSinceFlush = false
+    /// Законченные фразы, ждущие отправки.
+    private var buffered: [String] = []
+    private var flushTimer: Timer?
     /// How many words of the current recognition task have already been sent downstream.
-    private var committedCount = 0
     private var source = TranslatorLanguage.sources[0]
 
     private(set) lazy var pending: AsyncStream<UUID> = AsyncStream { self.pendingContinuation = $0 }
@@ -171,22 +163,16 @@ final class SimultaneousInterpreter: ObservableObject {
         self.source = source
 
         guard await Self.requestPermissions() else {
-            errorText = "Microphone and speech-recognition permission are both needed."
+            errorText = "Нужны разрешения на микрофон и распознавание речи."
             return
         }
 
         do {
-            // The hub owns the microphone; playback attaches to its engine so echo cancellation
-            // can see the translation as a reference signal when it plays out of the speaker.
             voice.attach(to: AudioCaptureHub.shared.audioEngine)
-            listener = try AudioCaptureHub.shared.addListener(
+            listener = try await AudioCaptureHub.shared.addListener(
                 locale: source.speechLocale,
-                onTranscript: { [weak self] text, isFinal in
-                    self?.ingest(text, isFinal: isFinal)
-                },
-                onLevel: { [weak self] rms, seconds in
-                    self?.observeLevel(rms, seconds: seconds)
-                })
+                onFinal: { [weak self] text in self?.accept(final: text) },
+                onVolatile: { [weak self] text in self?.inFlight = text })
             voice.start()
             isRunning = true
         } catch {
@@ -196,14 +182,13 @@ final class SimultaneousInterpreter: ObservableObject {
     }
 
     func stop() {
+        flushTimer?.invalidate()
+        flushTimer = nil
         voice.stop()
         AudioCaptureHub.shared.removeListener(listener)
         listener = nil
         inFlight = ""
-        lastHypothesis = []
-        committedCount = 0
-        silenceSeconds = 0
-        hadSpeechSinceFlush = false
+        buffered = []
         isRunning = false
     }
 
@@ -224,87 +209,50 @@ final class SimultaneousInterpreter: ObservableObject {
 
     func chunk(_ id: UUID) -> InterpretedChunk? { chunks.first { $0.id == id } }
 
-    /// Called once a chunk has been translated: stores it and starts speaking immediately, which
-    /// is the half of "simultaneous" that the screen can't show.
+    /// Вызывается, когда кусок переведён: сохраняет и сразу начинает читать вслух — это и есть та
+    /// половина «синхронности», которую экран показать не может.
     func complete(_ id: UUID, with translation: String, language: String, speak: Bool) {
         guard let index = chunks.firstIndex(where: { $0.id == id }) else { return }
         chunks[index].translated = translation
         if speak { voice.speak(translation, language: language, rate: speechRate) }
     }
 
-    // MARK: Segmentation
+    // MARK: Склейка законченных фраз
 
-    /// Keep the latest transcript. Nothing is emitted from here any more: WHEN to cut is decided
-    /// by silence in the audio (see `observeLevel`), not by counting words.
+    /// Границу фразы теперь проводит сама модель распознавания: закреплённый (final) результат —
+    /// это и есть законченный кусок. Своя нарезка по громкости и индексам больше не нужна, и с ней
+    /// ушёл целый класс ошибок.
     ///
-    /// The previous version cut every N words or on a timer, which is why phrases came out sliced
-    /// mid-thought -- a translator handed half a clause has nothing to work with, and no model,
-    /// local or cloud, recovers from that. Speakers already mark their own boundaries by pausing;
-    /// this waits for those instead of guessing.
-    private func ingest(_ transcript: String, isFinal: Bool) {
-        let words = transcript.split(separator: " ").map(String.init)
-        guard !words.isEmpty else {
-            inFlight = ""
+    /// Остаётся один выбор: отправлять каждую фразу сразу или подождать соседнюю и склеить. Это и
+    /// темп, и деньги: каждый запрос к облаку несёт одни и те же инструкции, поэтому две склеенные
+    /// фразы стоят заметно дешевле двух отдельных.
+    private func accept(final text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        inFlight = ""
+        guard !trimmed.isEmpty else { return }
+        buffered.append(trimmed)
+
+        flushTimer?.invalidate()
+        guard joinWindow > 0 else {
+            flushBuffered()
             return
         }
-        lastHypothesis = words
-        inFlight = words.dropFirst(committedCount).joined(separator: " ")
-
-        // A final result means iOS itself decided the utterance ended, and a sentence-ending mark
-        // is the same signal from the other direction. Neither is worth waiting out a pause for.
-        let terminators: Set<Character> = [".", "?", "!", "\u{3002}", "\u{FF1F}", "\u{FF01}"]
-        let endsSentence = words.last?.last.map { terminators.contains($0) } ?? false
-        if isFinal || endsSentence {
-            flushPending()
-            return
-        }
-        // Someone reading aloud can run a long time without a real pause. A safety valve, not the
-        // normal path -- deliberately generous so it almost never fires mid-thought.
-        if words.count - committedCount >= runawayWords {
-            flushPending()
+        flushTimer = Timer.scheduledTimer(withTimeInterval: joinWindow, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.flushBuffered() }
         }
     }
 
-    /// Voice-activity detection over the microphone level.
-    ///
-    /// The noise floor is tracked rather than hardcoded: a cafe and a quiet room differ by an order
-    /// of magnitude, so a fixed threshold would either cut constantly in one or never in the other.
-    /// It drifts down quickly and up slowly, which settles it on the room rather than on the voice.
-    private func observeLevel(_ rms: Float, seconds: Double) {
-        noiseFloor = rms < noiseFloor
-            ? (noiseFloor * 0.9 + rms * 0.1)
-            : (noiseFloor * 0.999 + rms * 0.001)
-        let isSpeech = rms > max(noiseFloor * 2.5, 0.008)
-
-        if isSpeech {
-            silenceSeconds = 0
-            hadSpeechSinceFlush = true
-        } else {
-            silenceSeconds += seconds
-            // A pause only means something if words came before it; silence in an empty room must
-            // not keep emitting nothing.
-            if hadSpeechSinceFlush, silenceSeconds >= pauseSeconds {
-                flushPending()
-            }
-        }
-    }
-
-    /// Emit everything heard since the last cut as one segment.
-    private func flushPending() {
-        hadSpeechSinceFlush = false
-        silenceSeconds = 0
-        guard lastHypothesis.count > committedCount else { return }
-        let words = Array(lastHypothesis.dropFirst(committedCount))
-        emit(words, advancingTo: lastHypothesis.count)
-    }
-
-    private func emit(_ words: [String], advancingTo newCommitted: Int) {
-        guard newCommitted > committedCount else { return }
-        let text = words.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        committedCount = newCommitted
+    private func flushBuffered() {
+        flushTimer?.invalidate()
+        flushTimer = nil
+        let text = buffered.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        buffered = []
+        // Отрезок из одного короткого слова («да», «ага», «мм») стоит целого запроса с полным
+        // набором инструкций ради трёх токенов смысла. Такие пропускаем.
+        guard text.count >= 4 else { return }
         let chunk = InterpretedChunk(original: text, translated: nil)
         chunks.append(chunk)
         pendingContinuation?.yield(chunk.id)
     }
+
 }

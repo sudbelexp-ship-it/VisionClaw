@@ -8,6 +8,7 @@ struct LiveView: View {
     let glassesReady: Bool
 
     @StateObject private var live = LiveSession.shared
+    @StateObject private var frames = LiveSession.shared.frames
     @StateObject private var synth = SpeechSynthesizer.shared
 
     var body: some View {
@@ -42,7 +43,11 @@ struct LiveView: View {
     private var preview: some View {
         ZStack {
             Color.black
-            if let frame = streamViewModel?.currentVideoFrame, live.isRunning {
+            // Кадр берётся из нашего же буфера, а не из currentVideoFrame модели потока: она
+            // рисует превью своим путём, который в эфире оказывался пустым — экран показывал
+            // «камера выключена», пока кадры уходили в модель. Заодно это честнее: видно ровно то,
+            // что отправляется. Обновляется раз в секунду, плавного видео тут и не нужно.
+            if let frame = live.frames.latest, live.isRunning {
                 Image(uiImage: frame)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -107,6 +112,8 @@ struct LiveView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            SpeechRateSlider()
+
             PrimaryButton(title: live.isRunning ? "Остановить эфир" : "Начать эфир",
                           systemName: live.isRunning ? "stop.fill" : "dot.radiowaves.left.and.right",
                           tint: live.isRunning ? .red : .brand) {
@@ -138,6 +145,8 @@ struct LiveView: View {
                     }
                 }
                 .padding(Metrics.medium)
+                // Иначе последняя реплика уезжает под панель вкладок.
+                .padding(.bottom, Metrics.large)
             }
             .onChange(of: live.entries.count) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {

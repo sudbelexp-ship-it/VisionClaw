@@ -88,14 +88,6 @@ final class LiveSession: ObservableObject {
     private var lastNarration = Date.distantPast
     private var sessionId = UUID()
 
-    // Накопление вопроса по паузе, как в переводчике: распознаватель не даёт времени,
-    // поэтому тишина считается по громкости буферов.
-    private var pendingWords: [String] = []
-    private var consumedPrefix = 0
-    private var silenceSeconds: Double = 0
-    private var heardSpeech = false
-    private var noiseFloor: Float = 0.01
-    private let pauseSeconds: Double = 0.8
 
     // MARK: Запуск
 
@@ -131,10 +123,11 @@ final class LiveSession: ObservableObject {
         }
 
         do {
-            listener = try AudioCaptureHub.shared.addListener(
+            // Границу вопроса проводит сама модель распознавания: закреплённый результат и есть
+            // законченная фраза. Своя нарезка по громкости и индексам больше не нужна.
+            listener = try await AudioCaptureHub.shared.addListener(
                 locale: SpeechRecognizerOneShot.activeLocale(),
-                onTranscript: { [weak self] text, isFinal in self?.ingest(text, isFinal: isFinal) },
-                onLevel: { [weak self] rms, seconds in self?.observeLevel(rms, seconds: seconds) })
+                onFinal: { [weak self] text in self?.acceptQuestion(text) })
             isListening = true
         } catch {
             // Без микрофона эфир всё ещё полезен в режиме гида, поэтому это не фатально.
@@ -182,40 +175,11 @@ final class LiveSession: ObservableObject {
 
     // MARK: Речь
 
-    private func observeLevel(_ rms: Float, seconds: Double) {
-        // Пока говорим сами, микрофон не слушаем: иначе гид услышит себя, посчитает это вопросом
-        // и ответит сам себе — ровно та петля, что была с Gemma 3 в OpenVision.
-        guard !SpeechSynthesizer.shared.isSpeaking, !isBusy else {
-            silenceSeconds = 0
-            heardSpeech = false
-            return
-        }
-        noiseFloor = rms < noiseFloor ? (noiseFloor * 0.9 + rms * 0.1) : (noiseFloor * 0.999 + rms * 0.001)
-        if rms > max(noiseFloor * 2.5, 0.008) {
-            silenceSeconds = 0
-            heardSpeech = true
-        } else {
-            silenceSeconds += seconds
-            if heardSpeech, silenceSeconds >= pauseSeconds {
-                flushQuestion()
-            }
-        }
-    }
-
-    private func ingest(_ transcript: String, isFinal: Bool) {
+    /// Пришла законченная фраза. Пока говорим сами — пропускаем: иначе гид услышит себя, посчитает
+    /// это вопросом и ответит сам себе.
+    private func acceptQuestion(_ text: String) {
         guard !SpeechSynthesizer.shared.isSpeaking, !isBusy else { return }
-        let words = transcript.split(separator: " ").map(String.init)
-        guard !words.isEmpty else { return }
-        pendingWords = Array(words.dropFirst(min(consumedPrefix, words.count)))
-        if isFinal { flushQuestion(totalWords: words.count) }
-    }
-
-    private func flushQuestion(totalWords: Int? = nil) {
-        heardSpeech = false
-        silenceSeconds = 0
-        let question = pendingWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        pendingWords = []
-        if let totalWords { consumedPrefix = totalWords } else { consumedPrefix += question.split(separator: " ").count }
+        let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Одно-два слова — почти всегда обрывок чужой фразы или шум, а не вопрос.
         guard question.split(separator: " ").count >= 2 else { return }
         Task { await answer(question: question) }
@@ -283,8 +247,10 @@ final class LiveSession: ObservableObject {
         let engine = IntelligenceEngine(
             rawValue: UserDefaults.standard.string(forKey: IntelligenceEngine.defaultsKey) ?? "") ?? .gigachat
         let backend = DirectAIBackendRouter.backend(for: engine)
-        // Предыдущие реплики как контекст — без них «а это что?» не к чему привязать.
-        let history = entries.suffix(6).compactMap { entry -> ChatTurn? in
+        // Контекст нужен вопросам — без него «а это что?» не к чему привязать. Рассказу гида он
+        // вреден: модель, видящая собственный предыдущий ответ, охотно повторяет его на новой
+        // картинке. Запрет на повтор остаётся в самом промпте списком «уже рассказано».
+        let history: [ChatTurn] = kind == .narration ? [] : entries.suffix(6).compactMap { entry in
             switch entry.kind {
             case .question: return ChatTurn(role: .user, text: entry.text)
             case .answer, .narration: return ChatTurn(role: .assistant, text: entry.text)
@@ -296,7 +262,7 @@ final class LiveSession: ObservableObject {
             let answer = try await backend.ask(
                 text: prompt,
                 imageData: image.jpegData(compressionQuality: 0.6),
-                history: Array(history))
+                history: history)
             let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
             let skipped = trimmed.lowercased().hasPrefix("пропустить") || trimmed.lowercased().hasPrefix("skip")
             guard !skipped, !trimmed.isEmpty else { return }

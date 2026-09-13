@@ -11,9 +11,28 @@ final class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDe
 
     @Published private(set) var isSpeaking = false
 
+    /// Множитель скорости, 0.5x…2x. Хранится здесь, а не передаётся в каждый вызов: его меняют
+    /// ползунком во время разговора, и все, кто говорит, должны подхватывать новое значение сами.
+    ///
+    /// Уже произносимая фраза не ускоряется — AVSpeechSynthesizer не меняет темп на лету. В
+    /// переводчике и у гида фразы короткие, поэтому новое значение слышно почти сразу.
+    static let rateKey = "speechRateMultiplier"
+
+    @Published var rateMultiplier: Double {
+        didSet { UserDefaults.standard.set(rateMultiplier, forKey: Self.rateKey) }
+    }
+
+    /// Значение для AVSpeechUtterance: базовый темп, умноженный на выбранное, в допустимых пределах.
+    var utteranceRate: Float {
+        let raw = AVSpeechUtteranceDefaultSpeechRate * Float(rateMultiplier)
+        return min(max(raw, AVSpeechUtteranceMinimumSpeechRate), AVSpeechUtteranceMaximumSpeechRate)
+    }
+
     private let synthesizer = AVSpeechSynthesizer()
 
     private override init() {
+        let stored = UserDefaults.standard.double(forKey: Self.rateKey)
+        rateMultiplier = stored > 0 ? stored : 1.0
         super.init()
         synthesizer.delegate = self
     }
@@ -25,7 +44,7 @@ final class SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDe
         // Russian); AVSpeechSynthesisVoice picks the best match for the given BCP-47 code, or
         // falls back to the device's default voice if that locale isn't installed.
         utterance.voice = AVSpeechSynthesisVoice(language: detectedLanguageCode(for: text))
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.rate = utteranceRate
         synthesizer.speak(utterance)
     }
 

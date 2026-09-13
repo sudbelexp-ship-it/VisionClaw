@@ -19,6 +19,7 @@
 
 import AVFoundation
 import Speech
+import UIKit
 import SwiftUI
 import UIKit
 
@@ -30,8 +31,11 @@ final class GlassesAssistant: ObservableObject {
     @Published private(set) var isListening = false
     @Published private(set) var status: String?
     @Published var lastError: String?
-    /// What the recogniser is hearing right now, for the settings screen's live test.
+    /// Что распознаватель слышит прямо сейчас. Показывается в настройках: без этого «фраза не
+    /// работает» невозможно отличить от «микрофон не слышит вообще» или «слышит, но другой язык».
     @Published private(set) var heard = ""
+    /// Когда фраза сработала в последний раз.
+    @Published private(set) var lastTriggerAt: Date?
 
     static let enabledKey = "glassesAssistantEnabled"
     static let phraseKey = "glassesAssistantPhrase"
@@ -48,9 +52,6 @@ final class GlassesAssistant: ObservableObject {
 
     private var listener: AudioCaptureHub.Listener?
     private var isHandling = false
-    /// Characters of the running transcript already consumed by a trigger, so one long recognition
-    /// task can fire several times without re-reading the same command.
-    private var consumedPrefix = 0
     private var pendingWorkItem: DispatchWorkItem?
 
     // MARK: Control
@@ -75,19 +76,13 @@ final class GlassesAssistant: ObservableObject {
         }
 
         let locale = SpeechRecognizerOneShot.activeLocale()
-        // Without on-device recognition this would stream every sound in the room to Apple all day
-        // and stop working the moment the network did.
-        guard SFSpeechRecognizer(locale: locale)?.supportsOnDeviceRecognition == true else {
-            lastError = "Always-on listening needs the offline dictation pack for "
-                + "\(locale.identifier). Install it under iOS Settings, General, Keyboard, Dictation."
-            return
-        }
-
         do {
-            consumedPrefix = 0
-            listener = try AudioCaptureHub.shared.addListener(
+            listener = try await AudioCaptureHub.shared.addListener(
                 locale: locale,
-                onTranscript: { [weak self] text, _ in self?.consider(text) })
+                // Черновой текст проверяется тоже: ждать закрепления фразы значит реагировать на
+                // обращение через секунду после того, как человек уже задал вопрос.
+                onFinal: { [weak self] text in self?.consider(text) },
+                onVolatile: { [weak self] text in self?.consider(text) })
             isListening = true
             status = "Listening for \u{201C}\(Self.phrase)\u{201D}"
         } catch {
@@ -124,15 +119,17 @@ final class GlassesAssistant: ObservableObject {
     /// letters and digits before comparing.
     private func consider(_ transcript: String) {
         guard !isHandling else { return }
-        let fresh = String(transcript.dropFirst(min(consumedPrefix, transcript.count)))
+        // Каждый результат — самостоятельная фраза, а не продолжение прошлой, поэтому отслеживать
+        // прочитанное больше не нужно. От повторного срабатывания на одном и том же черновике
+        // защищают флаг isHandling и отложенный запуск ниже.
+        let fresh = transcript
         heard = fresh
 
         // Hot commands are checked first and need no trigger word, the way a smart speaker takes
         // "next track" without being addressed. They are anchored to the start of what is left of
         // the utterance, so they cannot fire from the middle of a sentence.
         if let hit = HotCommandStore.shared.match(in: fresh) {
-            consumedPrefix = transcript.count
-            pendingWorkItem?.cancel()
+                pendingWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 Task { @MainActor in await self?.run(hit) }
             }
@@ -150,7 +147,11 @@ final class GlassesAssistant: ObservableObject {
         guard let range = haystack.range(of: needle) else { return }
 
         let question = String(haystack[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-        consumedPrefix = transcript.count
+        // Короткий отклик: без него невозможно отличить «фраза не распозналась» от «распозналась,
+        // но дальше что-то сломалось», а это две совершенно разные починки.
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        lastTriggerAt = Date()
+        status = "Слышу вас…"
 
         // Wait a beat before acting: the words right after the phrase are still arriving, and
         // firing on the first partial would send "what do you" instead of "what do you see".

@@ -9,7 +9,7 @@
 // the job whenever the network allows and Qwen3 takes over the moment it doesn't -- a translator is
 // most needed abroad, which is exactly where the signal is worst, so it can never simply stop.
 //
-//   speech -> text   SFSpeechRecognizer with requiresOnDeviceRecognition
+//   речь -> текст    SpeechAnalyzer (iOS 26), целиком на устройстве
 //   text -> text     GigaChat/YandexGPT when reachable, else Qwen3 through MLX, or Apple's
 //                    Translation framework -- see TranslatorEngine and CloudTranslator
 //   text -> speech   AVSpeechSynthesizer, rendered through the interpreter's own audio engine
@@ -104,18 +104,22 @@ enum InterpreterPace: String, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
-        case .fastest: return "Режет по самой короткой паузе. Быстрее всех, но дробит медленную речь."
-        case .balanced: return "Режет там, где человек ставит запятую. По умолчанию."
-        case .accurate: return "Ждёт точку. Лучшие формулировки на длинных фразах."
+        case .fastest: return "Отправляет каждую фразу сразу. Быстрее всех и дороже всех."
+        case .balanced: return "Ждёт секунду и склеивает соседние фразы. По умолчанию."
+        case .accurate: return "Ждёт дольше и переводит целыми мыслями. Точнее и вдвое дешевле."
         }
     }
 
-    /// Seconds of silence that end a segment.
-    var pauseSeconds: Double {
+    /// Сколько ждать соседнюю фразу, чтобы отправить их одним запросом.
+    ///
+    /// Границу фразы теперь проводит сама модель распознавания, поэтому выбирать длину паузы
+    /// больше не нужно. Остаётся выбор между скоростью и ценой: каждый запрос к облаку несёт одни
+    /// и те же инструкции, и две склеенные фразы стоят заметно дешевле двух отдельных.
+    var joinWindow: TimeInterval {
         switch self {
-        case .fastest: return 0.35
-        case .balanced: return 0.55
-        case .accurate: return 0.9
+        case .fastest: return 0
+        case .balanced: return 1.0
+        case .accurate: return 2.5
         }
     }
 }
@@ -259,7 +263,7 @@ struct LiveTranslatorView: View {
     }
 
     private func applyPace() {
-        interpreter.pauseSeconds = pace.pauseSeconds
+        interpreter.joinWindow = pace.joinWindow
     }
 
     // MARK: Language bar
@@ -335,7 +339,11 @@ struct LiveTranslatorView: View {
                             .foregroundStyle(.quaternary)
                             .id("inflight")
                     }
-                    if let errorText = interpreter.errorText {
+                    if translationEngine == .hybrid, cloud.requestCount > 0 {
+                StatusLine(kind: .idle, text: "Запросов в облако за сеанс: \(cloud.requestCount)")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let errorText = interpreter.errorText {
                         Label(errorText, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
@@ -414,6 +422,10 @@ struct LiveTranslatorView: View {
             Toggle(isOn: $speakAloud) {
                 Label("Читать вслух", systemImage: "ear")
                     .font(.subheadline)
+            }
+
+            if speakAloud {
+                SpeechRateSlider()
             }
 
             Button {

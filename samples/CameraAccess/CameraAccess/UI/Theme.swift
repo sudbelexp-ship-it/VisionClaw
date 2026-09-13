@@ -173,3 +173,32 @@ struct StatusLine: View {
         }
     }
 }
+
+/// Скорость диктора, 0.5x…2x, прямо под рукой во время разговора.
+///
+/// Живёт в общем файле, потому что нужен и переводчику, и гиду, и нет причин, чтобы в двух местах
+/// он выглядел и вёл себя по-разному. Значение общее: выставленное в переводчике действует и в
+/// эфире.
+struct SpeechRateSlider: View {
+    @ObservedObject private var synth = SpeechSynthesizer.shared
+
+    var body: some View {
+        HStack(spacing: Metrics.small) {
+            Image(systemName: "tortoise.fill")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Slider(value: $synth.rateMultiplier, in: 0.5...2.0, step: 0.1)
+                .tint(.brand)
+            Image(systemName: "hare.fill")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Text(String(format: "%.1fx", synth.rateMultiplier))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Скорость речи")
+        .accessibilityValue(String(format: "%.1f", synth.rateMultiplier))
+    }
+}

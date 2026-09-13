@@ -34,8 +34,11 @@ final class LiveFrameBuffer: ObservableObject {
     /// Сколько подряд спокойных кадров нужно. При 1 Гц это примерно секунда.
     private let stillnessFrames = 2
 
+    /// CIContext потокобезопасен, поэтому один на всех и рендер прямо на очереди декодера.
     private let context = CIContext(options: [.useSoftwareRenderer: false])
-    private var lastProcessed = Date.distantPast
+    /// Читается и пишется вне главного актора, отсюда замок.
+    private let lock = NSLock()
+    nonisolated(unsafe) private var lastProcessed = Date.distantPast
     private let interval: TimeInterval = 1.0
 
     private var signature: [UInt8] = []
@@ -60,7 +63,9 @@ final class LiveFrameBuffer: ObservableObject {
         sentSignature = []
         calmStreak = 0
         processedCount = 0
+        lock.lock()
         lastProcessed = .distantPast
+        lock.unlock()
     }
 
     /// Отметить, что этот кадр ушёл в модель.
@@ -68,31 +73,43 @@ final class LiveFrameBuffer: ObservableObject {
         sentSignature = signature
     }
 
-    /// Вызывается на каждый декодированный кадр. Почти всегда выходит сразу.
+    /// Вызывается на каждый декодированный кадр, на очереди декодера. Почти всегда выходит сразу.
+    ///
+    /// Преобразование делается ЗДЕСЬ, синхронно, а не отправляется на главный актор вместе с
+    /// буфером. VideoToolbox отдаёт кадры из пула и переиспользует их: буфер, переданный через
+    /// границу актора, к моменту обработки уже может содержать другой кадр — или тот же самый,
+    /// если пул вернул его повторно. Именно поэтому гид раз за разом описывал одну и ту же
+    /// картинку, хотя на превью (оно идёт другим путём) сцена менялась.
     nonisolated func ingest(_ pixelBuffer: CVPixelBuffer) {
-        Task { @MainActor in self.process(pixelBuffer) }
-    }
-
-    private func process(_ pixelBuffer: CVPixelBuffer) {
+        lock.lock()
         let now = Date()
-        guard now.timeIntervalSince(lastProcessed) >= interval else { return }
+        guard now.timeIntervalSince(lastProcessed) >= interval else {
+            lock.unlock()
+            return
+        }
         lastProcessed = now
+        lock.unlock()
 
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        // 1024 по длинной стороне: зрительным моделям больше не нужно, а трафик и время кодирования
-        // растут квадратично.
         let extent = ciImage.extent
         guard extent.width > 0, extent.height > 0 else { return }
+        // 1024 по длинной стороне: зрительным моделям больше не нужно, а трафик и время
+        // кодирования растут квадратично.
         let scale = min(1.0, 1024 / max(extent.width, extent.height))
         let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return }
 
         let image = UIImage(cgImage: cgImage)
+        let signature = Self.makeSignature(cgImage)
+        Task { @MainActor in self.apply(image: image, signature: signature) }
+    }
+
+    private func apply(image: UIImage, signature newSignature: [UInt8]) {
         latest = image
         processedCount += 1
 
         previousSignature = signature
-        signature = Self.makeSignature(cgImage)
+        signature = newSignature
         if previousSignature.isEmpty {
             calmStreak = 0
         } else if Self.difference(signature, previousSignature) <= stillnessThreshold {

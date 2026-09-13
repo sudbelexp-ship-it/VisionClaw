@@ -27,6 +27,9 @@ struct AskAssistantView: View {
     @State private var attachedImage: UIImage?
     @State private var showCameraCapture = false
     @State private var isCapturingGlassesPhoto = false
+    /// Вопрос ждёт кадра с камеры телефона: снимок сделан — сразу отправляем, не заставляя
+    /// нажимать «отправить» второй раз.
+    @State private var sendAfterCapture = false
     @FocusState private var draftFocused: Bool
 
     private var engine: IntelligenceEngine {
@@ -67,8 +70,15 @@ struct AskAssistantView: View {
                 onCaptured: { image in
                     attachedImage = image
                     showCameraCapture = false
+                    if sendAfterCapture {
+                        sendAfterCapture = false
+                        Task { await send() }
+                    }
                 },
-                onCancel: { showCameraCapture = false }
+                onCancel: {
+                    showCameraCapture = false
+                    sendAfterCapture = false
+                }
             )
             .ignoresSafeArea()
         }
@@ -357,6 +367,23 @@ struct AskAssistantView: View {
     private func send() async {
         guard canSend else { return }
         speechRecognizer.stop()
+
+        // Вопрос про то, что перед глазами, без приложенного кадра — снимаем сами. Раньше он
+        // уходил голым текстом, и модель справедливо отвечала, что ничего не видит; выглядело это
+        // как сломанное зрение, а не как недостающий снимок.
+        if attachedImage == nil, VisionIntent.needsPhoto(draft) {
+            switch activeSource {
+            case .glasses:
+                await captureGlassesPhoto()
+            case .iPhoneCamera, .automatic:
+                // Камеру телефона нельзя открыть без участия человека, поэтому показываем её и
+                // отправляем сразу после кадра.
+                sendAfterCapture = true
+                showCameraCapture = true
+                return
+            }
+        }
+
         let text = draft
         let image = attachedImage
         // Поле очищается сразу: раньше вопрос висел в нём до прихода ответа, и это читалось как

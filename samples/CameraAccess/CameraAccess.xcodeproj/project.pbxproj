@@ -64,6 +64,7 @@
 		A503C8E1742BD69F0E85137C /* HotCommandsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */; };
 		C1E47B203F86A95D7204E8B1 /* HotCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F9A6D5C82E147B9503D6AF /* HotCommands.swift */; };
 		7E05C9A4318DF26B540A1E93 /* ChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */; };
+		C2049E7B815AD36F0E41C97A /* VisionIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A1D3F60B927EC5713F82D0 /* VisionIntent.swift */; };
 		1A6F30D85E27B94C0A3D7E15 /* CloudTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C82B71F0D935EA6182C4F0B /* CloudTranslator.swift */; };
 		5A1D8E62B037F4C9A2E61D08 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E430A75C6182BD40F7A3E61 /* HistoryView.swift */; };
 		3F7A2C18D460B9E5714CA09B /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */; };
@@ -159,6 +160,7 @@
 		7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCommandsView.swift; sourceTree = "<group>"; };
 		30F9A6D5C82E147B9503D6AF /* HotCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCommands.swift; sourceTree = "<group>"; };
 		B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSession.swift; sourceTree = "<group>"; };
+		48A1D3F60B927EC5713F82D0 /* VisionIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionIntent.swift; sourceTree = "<group>"; };
 		4C82B71F0D935EA6182C4F0B /* CloudTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranslator.swift; sourceTree = "<group>"; };
 		9E430A75C6182BD40F7A3E61 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStore.swift; sourceTree = "<group>"; };
@@ -330,6 +332,7 @@
 			isa = PBXGroup;
 			children = (
 				B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */,
+				48A1D3F60B927EC5713F82D0 /* VisionIntent.swift */,
 				B1F71EB69113BA510C3D0DBF /* DirectAIBackend.swift */,
 				ED08FA9DB3B63F4B27F5F65F /* SpeechRecognizerOneShot.swift */,
 				FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */,
@@ -593,6 +596,7 @@
 				A503C8E1742BD69F0E85137C /* HotCommandsView.swift in Sources */,
 				C1E47B203F86A95D7204E8B1 /* HotCommands.swift in Sources */,
 				7E05C9A4318DF26B540A1E93 /* ChatSession.swift in Sources */,
+				C2049E7B815AD36F0E41C97A /* VisionIntent.swift in Sources */,
 				1A6F30D85E27B94C0A3D7E15 /* CloudTranslator.swift in Sources */,
 				5A1D8E62B037F4C9A2E61D08 /* HistoryView.swift in Sources */,
 				3F7A2C18D460B9E5714CA09B /* ConversationStore.swift in Sources */,
@@ -643,7 +647,7 @@
 				ENABLE_PREVIEWS = YES;
 				FRAMEWORK_SEARCH_PATHS = "";
 				INFOPLIST_FILE = CameraAccess/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -671,7 +675,7 @@
 				DEVELOPMENT_TEAM = WY253UX7FC;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = CameraAccess/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -696,7 +700,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccessTests;
@@ -725,7 +729,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.meta.wearables.external.CameraAccessTests;
@@ -793,7 +797,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

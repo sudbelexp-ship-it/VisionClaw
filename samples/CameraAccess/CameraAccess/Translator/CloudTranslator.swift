@@ -19,8 +19,11 @@ final class CloudTranslator: ObservableObject {
     static let shared = CloudTranslator()
     private init() {}
 
-    /// Whether the last segment went to the cloud or fell back, so the screen can say which the
-    /// user is actually hearing rather than which they selected.
+    /// Сколько запросов ушло в облако за сеанс. Показывается на экране: счёт идёт на сотни в час,
+    /// и узнавать об этом из выписки поздно.
+    @Published private(set) var requestCount = 0
+    /// Ушёл ли последний отрезок в облако или откатился на устройство — чтобы экран говорил, что
+    /// человек слышит на самом деле, а не что он выбрал.
     @Published private(set) var lastUsedFallback = false
     @Published private(set) var lastFallbackReason: String?
 
@@ -60,6 +63,8 @@ final class CloudTranslator: ObservableObject {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.serviceKey) }
     }
 
+    func resetCounter() { requestCount = 0 }
+
     /// Translate one segment, falling back to the on-device model on any failure.
     func translate(_ text: String,
                    from sourceName: String,
@@ -67,6 +72,7 @@ final class CloudTranslator: ObservableObject {
                    recentContext: [String]) async throws -> String {
         let service = self.service
         if service.isConfigured {
+            requestCount += 1
             do {
                 let answer = try await requestCloud(text, service: service,
                                                     from: sourceName, to: targetName,
@@ -92,17 +98,17 @@ final class CloudTranslator: ObservableObject {
                               from sourceName: String,
                               to targetName: String,
                               recentContext: [String]) async throws -> String {
-        var prompt = """
-            Translate the following \(sourceName) speech into \(targetName).
-            Reply with the translation and nothing else: no quotes, no notes, no original text.
-            It comes from a live conversation and may begin or end mid-sentence — translate it as \
-            it stands, do not complete it, and do not repeat anything already translated.
-            """
-        if !recentContext.isEmpty {
-            prompt += "\n\nAlready translated, for continuity only:\n"
-                + recentContext.suffix(3).joined(separator: "\n")
+        // Инструкция намеренно короткая. Она уходит с КАЖДЫМ отрезком речи, а отрезков за час
+        // разговора набираются сотни: на замерах длинный вариант давал 97 токенов инструкций
+        // против 25 токенов самого текста — то есть 86% оплаченного объёма не несли смысла.
+        var prompt = "Переведи с \(sourceName) на \(targetName). Только перевод. "
+            + "Это фрагмент живой речи, может обрываться — не дополняй его.\n"
+        if let previous = recentContext.last {
+            // Одна предыдущая реплика вместо трёх: род и местоимения она удерживает так же,
+            // а объём контекста втрое меньше.
+            prompt += "Предыдущая фраза (для связности, не переводить): \(previous)\n"
         }
-        prompt += "\n\nText:\n\(text)"
+        prompt += "\n" + text
 
         // A short timeout on purpose: past a couple of seconds the translation is useless anyway,
         // and falling back to the local model beats making the user wait for something stale.

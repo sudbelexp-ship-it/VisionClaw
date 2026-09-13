@@ -14,7 +14,7 @@ struct AskAssistantView: View {
     let streamViewModel: StreamSessionViewModel?
 
     @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
-    @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.openai.rawValue
+    @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
 
     @StateObject private var speechRecognizer = SpeechRecognizerOneShot.shared
     @StateObject private var speechSynthesizer = SpeechSynthesizer.shared
@@ -33,17 +33,13 @@ struct AskAssistantView: View {
         CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera
     }
     private var engine: IntelligenceEngine {
-        IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai
+        IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat
     }
     private var canAsk: Bool {
         !isAsking && (!questionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachedImage != nil)
     }
-    /// Every direct engine (see IntelligenceEngine.isDirect) -- what the top-bar switcher offers.
-    /// Never openai/gemini: picking either of those from here would need to also hand up the
-    /// LiveKit call, which this screen has no connection to at all.
-    private var directEngines: [IntelligenceEngine] {
-        IntelligenceEngine.allCases.filter(\.isDirect)
-    }
+    /// Every engine, since all of them now answer directly from the phone.
+    private var directEngines: [IntelligenceEngine] { IntelligenceEngine.allCases }
 
     var body: some View {
         ZStack {
@@ -52,7 +48,10 @@ struct AskAssistantView: View {
             VStack(spacing: 0) {
                 topBar
 
-                if reply.isEmpty && errorMessage == nil && attachedImage == nil && !isAsking {
+                // errorMessage is not part of this test any more: the error has its own pinned slot
+                // below, so an error on an otherwise empty screen should still show the "ask me
+                // something" prompt rather than an empty grey expanse.
+                if reply.isEmpty && attachedImage == nil && !isAsking {
                     emptyState
                     Spacer()
                 } else {
@@ -101,12 +100,18 @@ struct AskAssistantView: View {
                                     .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                             }
 
-                            if let errorMessage {
-                                errorCard(errorMessage)
-                            }
                         }
                         .padding()
                     }
+                }
+
+                // Pinned above the input bar rather than at the end of the transcript: an error
+                // that lands under a long answer is an error nobody sees, which is how a mic that
+                // was reporting a real problem still looked like a mic that silently did nothing.
+                if let errorMessage {
+                    errorCard(errorMessage)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
                 }
 
                 inputBar
@@ -272,6 +277,11 @@ struct AskAssistantView: View {
             return
         }
         errorMessage = nil
+        // The reply is spoken aloud, and AVSpeechSynthesizer holds the audio session while it
+        // talks. Reconfiguring that session for capture underneath it fails, so tapping the mic
+        // right after an answer did nothing at all — which read as "the mic is broken for this
+        // engine" purely because that engine's answer happened to still be playing.
+        speechSynthesizer.stop()
         do {
             try await speechRecognizer.start()
         } catch {
@@ -335,7 +345,7 @@ struct AskAssistantView: View {
     }
 
     private func ask() async {
-        guard let backend = DirectAIBackendRouter.backend(for: engine) else { return }
+        let backend = DirectAIBackendRouter.backend(for: engine)
         errorMessage = nil
         reply = ""
         isAsking = true

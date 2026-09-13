@@ -1,56 +1,16 @@
+import Speech
 import SwiftUI
-
-/// Reachability of the hosted gateway, resolved by an actual authenticated
-/// request. "Configured" and "working" are different things -- a wrong token
-/// looks identical to a correct one until something calls the server.
-enum GatewayStatus: Equatable {
-  case checking
-  case ready
-  case notConfigured
-  case unauthorized
-  case unreachable(String)
-}
-
-private struct GatewayStatusLabel: View {
-  let status: GatewayStatus
-
-  var body: some View {
-    switch status {
-    case .checking:
-      ProgressView()
-    case .ready:
-      Label("Connected", systemImage: "checkmark.circle.fill")
-        .foregroundStyle(.green)
-        .labelStyle(.titleAndIcon)
-    case .notConfigured:
-      Text("Not set up")
-        .foregroundStyle(.secondary)
-    case .unauthorized:
-      Label("Token rejected", systemImage: "exclamationmark.triangle.fill")
-        .foregroundStyle(.orange)
-        .labelStyle(.titleAndIcon)
-    case .unreachable(let why):
-      Label(why, systemImage: "exclamationmark.triangle.fill")
-        .foregroundStyle(.orange)
-        .labelStyle(.titleAndIcon)
-    }
-  }
-}
 
 struct SettingsView: View {
   @Environment(\.dismiss) private var dismiss
   private let settings = SettingsManager.shared
 
-  @State private var cloudGatewayURL: String = ""
-  @State private var cloudGatewayToken: String = ""
-  @State private var accountEmail: String?
   @State private var showResetConfirmation = false
-  @State private var gatewayStatus: GatewayStatus = .checking
   // Applies immediately rather than on Save: the root view observes the same
   // key and swaps the capture pipeline live.
   @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
-  @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.openai.rawValue
-  @AppStorage(SettingsManager.showCaptionsKey) private var showCaptions = true
+  @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
+  @AppStorage(SettingsManager.speechLocaleKey) private var speechLocaleRaw = ""
 
   private var cameraFooter: String {
     switch CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera {
@@ -60,12 +20,33 @@ struct SettingsView: View {
     }
   }
 
+  /// Languages this phone can actually dictate in, alphabetical. Taken from the Speech framework
+  /// rather than hardcoded, so a language pack the user installs later simply shows up.
+  private static let dictationLocales: [Locale] = {
+    SFSpeechRecognizer.supportedLocales()
+      .sorted { displayName(for: $0) < displayName(for: $1) }
+  }()
+
+  private static func displayName(for locale: Locale) -> String {
+    Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+  }
+
+  /// What "Follow phone" resolves to right now. Worth spelling out: it is the phone's own language
+  /// setting, NOT the language this app's interface happens to be in.
+  private var systemSpeechLanguageName: String {
+    let identifier = Locale.preferredLanguages.first ?? Locale.current.identifier
+    return Self.displayName(for: Locale(identifier: identifier))
+  }
+
+  private var speechFooter: String {
+    "Language the mic button on the Ask screen listens for. The app's interface is English, so "
+      + "leaving this to the app alone made it listen in English on a Russian phone."
+  }
+
   private var intelligenceFooter: String {
-    switch IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai {
-    case .openai: return "OpenAI gpt-realtime. Applies to the next call."
-    case .gemini: return "Google Gemini Live. Applies to the next call."
-    case .gigachat: return "Sber's GigaChat, direct from the phone — no LiveKit call, tap to ask instead. Configure the key under GigaChat below."
-    case .yandexgpt: return "Yandex Cloud's YandexGPT, direct from the phone — tap to ask instead of a live call. Configure the key under YandexGPT below."
+    switch IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat {
+    case .gigachat: return "Sber's GigaChat, answered straight from this phone. Configure the key under GigaChat below."
+    case .yandexgpt: return "Yandex Cloud's YandexGPT, answered straight from this phone. Configure the key under YandexGPT below."
     case .localMLX: return "Runs fully on-device via Apple MLX — no account, no network. Download the model under Local Model below first."
     }
   }
@@ -89,72 +70,16 @@ struct SettingsView: View {
             }
           }
           .pickerStyle(.menu)
-          if !(IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai).isDirect {
-            Toggle("Show captions", isOn: $showCaptions)
-          }
         }
 
-        // Account / connected-apps / gateway plumbing belongs to the LiveKit path only
-        // (OpenAI and Gemini answer through the hosted agent worker). GigaChat, YandexGPT and
-        // the local model talk to their own endpoint straight from the phone and never touch
-        // any of it -- showing it to them surfaced a "Status: Not set up", a Connected Apps
-        // screen that can only fail with "Cloud backend not configured", and someone else's
-        // pilot-study gateway URL, all of which read as the app being broken.
-        if !(IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai).isDirect {
-          Section {
-            if let accountEmail, !accountEmail.isEmpty {
-              HStack {
-                Text("Signed in as")
-                Spacer()
-                Text(accountEmail)
-                  .foregroundColor(.secondary)
-                  .lineLimit(1)
-                  .truncationMode(.middle)
-              }
-              Button("Sign out", role: .destructive) { signOut() }
-            }
-            HStack {
-              Text("Status")
-              Spacer()
-              GatewayStatusLabel(status: gatewayStatus)
-            }
-
-            NavigationLink("Connected Apps") {
-              ConnectedAppsView()
-            }
-
-            NavigationLink("Recent Tasks") {
-              RecentTasksView()
+        Section(header: Text("Voice input"), footer: Text(speechFooter)) {
+          Picker("Language", selection: $speechLocaleRaw) {
+            Text("Follow phone (\(systemSpeechLanguageName))").tag("")
+            ForEach(Self.dictationLocales, id: \.identifier) { locale in
+              Text(Self.displayName(for: locale)).tag(locale.identifier)
             }
           }
-
-          // The URL and token ship with working defaults, so most people never
-          // need to see them; surfacing them as primary fields made a configured
-          // setup look like one awaiting setup.
-          Section {
-            DisclosureGroup("Gateway settings") {
-              VStack(alignment: .leading, spacing: 4) {
-                Text("Gateway URL")
-                  .font(.caption)
-                  .foregroundColor(.secondary)
-                TextField("https://gateway.example.com", text: $cloudGatewayURL)
-                  .autocapitalization(.none)
-                  .disableAutocorrection(true)
-                  .keyboardType(.URL)
-                  .font(.system(.body, design: .monospaced))
-              }
-
-              VStack(alignment: .leading, spacing: 4) {
-                Text("Access Token")
-                  .font(.caption)
-                  .foregroundColor(.secondary)
-                TextField("Your gateway access token", text: $cloudGatewayToken)
-                  .autocapitalization(.none)
-                  .disableAutocorrection(true)
-                  .font(.system(.body, design: .monospaced))
-              }
-            }
-          }
+          .pickerStyle(.menu)
         }
 
         Section {
@@ -181,84 +106,19 @@ struct SettingsView: View {
       .navigationTitle("Settings")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
-          Button("Cancel") {
-            dismiss()
-          }
-        }
         ToolbarItem(placement: .navigationBarTrailing) {
-          Button("Save") {
-            save()
-            dismiss()
-          }
-          .fontWeight(.semibold)
+          Button("Done") { dismiss() }
+            .fontWeight(.semibold)
         }
       }
       .alert("Reset Settings", isPresented: $showResetConfirmation) {
         Button("Reset", role: .destructive) {
           settings.resetAll()
-          loadCurrentValues()
         }
         Button("Cancel", role: .cancel) {}
       } message: {
         Text("This will reset all settings to the values built into the app.")
       }
-      .onAppear {
-        loadCurrentValues()
-      }
-      .task {
-        await refreshGatewayStatus()
-      }
     }
-  }
-
-  /// Ask the gateway for something that needs a valid token. /apps is the
-  /// cheapest such route, and distinguishing 401 from a transport failure is
-  /// the whole point -- they need opposite fixes.
-  private func refreshGatewayStatus() async {
-    
-    gatewayStatus = .checking
-    guard GeminiConfig.isAgentConfigured,
-          let url = URL(string: "\(GeminiConfig.agentBaseURL)/apps") else {
-      gatewayStatus = .notConfigured
-      return
-    }
-
-    var request = URLRequest(url: url)
-    request.timeoutInterval = 15
-    request.setValue("Bearer \(GeminiConfig.agentToken)", forHTTPHeaderField: "Authorization")
-
-    do {
-      let (_, response) = try await URLSession.shared.data(for: request)
-      let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-      switch code {
-      case 200: gatewayStatus = .ready
-      case 401, 403: gatewayStatus = .unauthorized
-      default: gatewayStatus = .unreachable("Server error \(code)")
-      }
-    } catch {
-      gatewayStatus = .unreachable("Unreachable")
-    }
-  }
-
-  private func loadCurrentValues() {
-    cloudGatewayURL = settings.cloudGatewayURL
-    cloudGatewayToken = settings.cloudGatewayToken
-    accountEmail = settings.accountEmail
-  }
-
-  /// Drops the gateway credential; the sign-in gate returns at next launch.
-  private func signOut() {
-    settings.cloudGatewayToken = ""
-    settings.accountEmail = nil
-    settings.accountStatus = nil
-    cloudGatewayToken = ""
-    accountEmail = nil
-    gatewayStatus = .notConfigured
-  }
-
-  private func save() {
-    settings.cloudGatewayURL = cloudGatewayURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    settings.cloudGatewayToken = cloudGatewayToken.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }

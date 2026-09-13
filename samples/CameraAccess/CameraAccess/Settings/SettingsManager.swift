@@ -10,15 +10,15 @@ enum AgentBackend: String, CaseIterable {
 }
 
 
-/// Which model answers. `.openai`/`.gemini` travel to the agent worker as room-token metadata
-/// (the phone never talks to either provider directly — see LiveKitSession). `.gigachat`,
-/// `.yandexgpt`, and `.localMLX` are DIRECT backends (see DirectAIBackend.swift): selecting one
-/// bypasses LiveKit/the agent/the gateway entirely, and StreamSessionView shows AskAssistantView
-/// instead of the call screen.
-// OpenAI is the default engine. The picker renders allCases in declaration order.
+/// Which model answers. All three are DIRECT backends (see DirectAIBackend.swift): the phone
+/// talks to the endpoint itself, or to nothing at all in the local model's case.
+///
+/// OpenAI and Gemini used to sit here too, routed through LiveKit and a hosted agent worker.
+/// They are gone: reaching them needed a gateway account this app's user does not have and will
+/// not get, so every one of their screens could only ever report a failure, and the whole
+/// LiveKit/agent/gateway stack was dead weight in the binary. The removal took the LiveKit SDK,
+/// the call screen, the gateway settings, Connected Apps and Recent Tasks with it.
 enum IntelligenceEngine: String, CaseIterable {
-  case openai = "openai"
-  case gemini = "gemini"
   case gigachat = "gigachat"
   case yandexgpt = "yandexgpt"
   case localMLX = "localMLX"
@@ -27,20 +27,9 @@ enum IntelligenceEngine: String, CaseIterable {
 
   var label: String {
     switch self {
-    case .openai: return "OpenAI"
-    case .gemini: return "Gemini"
     case .gigachat: return "GigaChat"
     case .yandexgpt: return "YandexGPT"
     case .localMLX: return "Local (FastVLM)"
-    }
-  }
-
-  /// True for a direct backend (see DirectAIBackend.swift) — false for the two LiveKit-routed
-  /// realtime engines.
-  var isDirect: Bool {
-    switch self {
-    case .openai, .gemini: return false
-    case .gigachat, .yandexgpt, .localMLX: return true
     }
   }
 }
@@ -141,7 +130,7 @@ final class SettingsManager {
   var intelligenceEngine: IntelligenceEngine {
     get {
       guard let raw = defaults.string(forKey: IntelligenceEngine.defaultsKey),
-            let engine = IntelligenceEngine(rawValue: raw) else { return .openai }
+            let engine = IntelligenceEngine(rawValue: raw) else { return .gigachat }
       return engine
     }
     set { defaults.set(newValue.rawValue, forKey: IntelligenceEngine.defaultsKey) }
@@ -161,6 +150,17 @@ final class SettingsManager {
   var showCaptions: Bool {
     get { defaults.object(forKey: Self.showCaptionsKey) as? Bool ?? true }
     set { defaults.set(newValue, forKey: Self.showCaptionsKey) }
+  }
+
+  /// Dictation language for the Ask screen's mic, as a locale identifier ("ru-RU"). Empty means
+  /// "follow the phone". Needed as an explicit choice because guessing it from the app's own
+  /// locale is wrong: this app ships English strings only, so `Locale.current` reports en-US even
+  /// on a Russian phone, and dictation then transcribed Russian speech into English words.
+  static let speechLocaleKey = "speechLocaleIdentifier"
+
+  var speechLocaleIdentifier: String {
+    get { defaults.string(forKey: Self.speechLocaleKey) ?? "" }
+    set { defaults.set(newValue, forKey: Self.speechLocaleKey) }
   }
 
   /// Cloud by default: the hosted gateway needs nothing installed and keeps

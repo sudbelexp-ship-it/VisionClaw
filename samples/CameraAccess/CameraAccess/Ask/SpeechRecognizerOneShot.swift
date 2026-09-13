@@ -32,22 +32,38 @@ final class SpeechRecognizerOneShot: ObservableObject {
     private var peakLevel: Float = 0
     private var sawAnyResult = false
 
-    /// A recognizer for the device's own language, falling back to Russian and then English.
-    /// `SFSpeechRecognizer()` uses the current locale implicitly and returns nil when that locale
-    /// has no speech support at all — which surfaced as a bare "isn't available right now".
-    private static func makeRecognizer() -> SFSpeechRecognizer? {
-        var candidates: [Locale] = [Locale.current]
-        if let code = Locale.current.language.languageCode?.identifier, code == "ru" {
-            candidates.append(Locale(identifier: "ru-RU"))
+    /// The language dictation should listen for: an explicit choice in Settings, otherwise the
+    /// phone's own first preferred language.
+    ///
+    /// Deliberately NOT `Locale.current`. That returns the locale the *app* resolved to, which is
+    /// bounded by the localizations the app ships — and this app ships English only. On a Russian
+    /// phone it therefore reports en-US, so the recognizer happily listened in English and wrote
+    /// Russian speech out as English-looking words ("Lenient robot microphone is in yet").
+    /// `Locale.preferredLanguages` is the device's own list and is unaffected by that.
+    static func activeLocale() -> Locale {
+        let saved = SettingsManager.shared.speechLocaleIdentifier
+        if !saved.isEmpty { return Locale(identifier: saved) }
+        if let preferred = Locale.preferredLanguages.first {
+            return Locale(identifier: preferred)
         }
-        candidates.append(Locale(identifier: "ru-RU"))
-        candidates.append(Locale(identifier: "en-US"))
+        return Locale.current
+    }
+
+    /// A recognizer for `activeLocale()`, falling back to the bare language ("ru" when "ru-RU"
+    /// isn't offered) and finally to whatever the system will give us, so a missing language pack
+    /// degrades instead of dead-ending.
+    private static func makeRecognizer() -> SFSpeechRecognizer? {
+        let wanted = activeLocale()
+        var candidates = [wanted]
+        if let code = wanted.language.languageCode?.identifier {
+            candidates.append(Locale(identifier: code))
+        }
         for locale in candidates {
             if let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable {
                 return recognizer
             }
         }
-        return SFSpeechRecognizer()
+        return nil
     }
 
     /// Starts listening. Throws if speech recognition or microphone permission is denied, or the
@@ -59,7 +75,7 @@ final class SpeechRecognizerOneShot: ObservableObject {
         guard speechStatus == .authorized else { throw SpeechError.notAuthorized }
         guard await requestMicrophoneAuthorization() else { throw SpeechError.notAuthorized }
         guard let recognizer = Self.makeRecognizer(), recognizer.isAvailable else {
-            throw SpeechError.unavailable
+            throw SpeechError.unavailable(language: Self.activeLocale().identifier)
         }
 
         transcript = ""
@@ -179,15 +195,16 @@ final class SpeechRecognizerOneShot: ObservableObject {
 
     enum SpeechError: LocalizedError {
         case notAuthorized
-        case unavailable
+        case unavailable(language: String)
         case noInput(route: String?)
 
         var errorDescription: String? {
             switch self {
             case .notAuthorized:
                 return "Speech recognition needs microphone and speech-recognition permission — allow both in Settings."
-            case .unavailable:
-                return "Speech recognition isn't available for this language on this device."
+            case .unavailable(let language):
+                return "Dictation isn't available for \(language) on this phone. "
+                    + "Pick another language under Settings → Voice input."
             case .noInput(let route):
                 return "No usable microphone input\(route.map { " (route: \($0))" } ?? "")."
             }

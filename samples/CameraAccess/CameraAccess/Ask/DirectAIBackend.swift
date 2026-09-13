@@ -1,7 +1,7 @@
 // VisionClaw - DirectAIBackend.swift
-// A backend the phone talks to directly (REST or on-device inference), bypassing LiveKit + the
-// agent worker + the gateway entirely. GigaChat, YandexGPT, and the local FastVLM model all
-// conform; Gemini/OpenAI stay on the existing LiveKit path untouched.
+// A backend the phone talks to directly (REST or on-device inference). GigaChat, YandexGPT and
+// the local FastVLM model all conform -- and since OpenAI/Gemini were removed, that is every
+// engine the app has, so the router below can no longer return nil.
 
 import Foundation
 
@@ -26,13 +26,11 @@ struct LocalFastVLMBackend: DirectAIBackend {
 }
 
 enum DirectAIBackendRouter {
-    /// The backend for `engine`, or nil if `engine` isn't a direct (non-LiveKit) one.
-    static func backend(for engine: IntelligenceEngine) -> DirectAIBackend? {
+    static func backend(for engine: IntelligenceEngine) -> DirectAIBackend {
         switch engine {
         case .gigachat: return GigaChatService.shared
         case .yandexgpt: return YandexGPTService.shared
         case .localMLX: return LocalFastVLMBackend()
-        case .openai, .gemini: return nil
         }
     }
 }

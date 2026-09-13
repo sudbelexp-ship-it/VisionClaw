@@ -9,10 +9,14 @@
 //
 // StreamSessionView.swift
 //
-// The app's front door. Phone mode joins a LiveKit room on sight -- camera,
-// mic and the assistant all come up together; everything intelligent lives
-// server-side. Glasses mode keeps the DAT streaming flow (assistant voice for
-// glasses returns when their frames publish into the room as a track).
+// The app's front door. Every engine now answers directly from the phone
+// (GigaChat, YandexGPT, or the on-device FastVLM model), so this is simply the
+// ask screen -- the LiveKit call screen, the agent worker and the gateway that
+// OpenAI/Gemini needed are gone.
+//
+// The glasses still matter: StreamSessionViewModel drives the DAT SDK, and
+// AskAssistantView reaches into it to capture a single frame on demand. Glasses
+// that aren't registered yet get the pairing screen instead.
 //
 
 import MWDATCore
@@ -23,29 +27,10 @@ struct StreamSessionView: View {
   let wearables: WearablesInterface?
   private let wearablesViewModel: WearablesViewModel?
   @StateObject private var viewModel: StreamSessionViewModel
-  @StateObject private var liveKit = LiveKitSession()
   @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.iPhoneCamera.rawValue
-  @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.openai.rawValue
-  @State private var glassesAutoStarted = false
 
   private var captureSource: CaptureSource {
     CaptureSource(rawValue: captureSourceRaw) ?? .iPhoneCamera
-  }
-
-  private var glassesPlaceholder: (title: String, caption: String) {
-    switch viewModel.glassesIssue {
-    case .sdkUnavailable:
-      return ("Glasses unavailable", "The glasses SDK is not available on this device.")
-    case .permissionNeeded:
-      return ("Glasses permission needed", "Allow it in the Meta AI app.")
-    case .hingesClosed:
-      return ("Glasses folded", "Open the hinges to start streaming.")
-    case .reconnecting:
-      return ("Reconnecting to glasses", "Make sure your glasses are on and the hinges are open.")
-    case nil:
-      return ("Put on your glasses",
-              "Open the hinges and put them on. The camera turns off when they're folded or off your face.")
-    }
   }
 
   init(wearables: WearablesInterface?, wearablesVM: WearablesViewModel?) {
@@ -54,114 +39,18 @@ struct StreamSessionView: View {
     self._viewModel = StateObject(wrappedValue: StreamSessionViewModel(wearables: wearables))
   }
 
-  private var intelligenceEngine: IntelligenceEngine {
-    IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai
-  }
-
   var body: some View {
     ZStack {
-      if intelligenceEngine.isDirect {
-        // GigaChat / YandexGPT / local FastVLM: a one-shot "ask" screen, no LiveKit call at all
-        // (see DirectAIBackend.swift). Glasses photo capture still needs the DAT-SDK-driven
-        // StreamSessionViewModel, so it rides along even though its LiveKit-facing state
-        // (isStreaming etc.) otherwise goes unused on this path.
-        AskAssistantView(streamViewModel: viewModel)
-      } else if captureSource != .glasses {
-        // iPhone camera or audio-only -- both skip the DAT/wearables flow entirely and go
-        // straight to the call screen; LiveKitSession itself decides whether to publish video.
-        LiveKitStreamView(session: liveKit)
-      } else if viewModel.isStreaming {
-        // Glasses are just another camera: same call screen, same agent, with
-        // DAT frames bridged into the room via pushGlassesFrame.
-        LiveKitStreamView(session: liveKit, glassesPlaceholder: glassesPlaceholder)
-      } else if let wearablesViewModel {
-        if wearablesViewModel.registrationState == .registered || wearablesViewModel.hasMockDevice {
-          // No start-choice interstitial: registered glasses go straight to
-          // the call screen, auto-starting the stream once per entry, then
-          // re-attempting on a slow cadence while the glasses are asleep --
-          // the placeholder is the only voice for the wait.
-          LiveKitStreamView(session: liveKit, glassesPlaceholder: glassesPlaceholder)
-            .task {
-              guard !glassesAutoStarted else { return }
-              glassesAutoStarted = true
-              NSLog("[Stream] auto-start begin (waiting on glasses wake + BT handshake)")
-              await viewModel.handleStartStreaming()
-              // Poll fast so the loop reacts the instant the stream is up, and
-              // re-attempt the start every ~10s while the glasses are still waking
-              // (up to ~90s). The video itself is driven by the streamingStatus
-              // onChange, so this loop only governs retries, not the reveal.
-              for tick in 0..<180 {
-                if viewModel.isStreaming || captureSource != .glasses { break }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if tick > 0, tick % 20 == 0 { await viewModel.handleStartStreaming() }
-              }
-            }
-        } else {
-          HomeScreenView(viewModel: wearablesViewModel)
-        }
+      // Glasses as the capture source but not paired yet is the one case that needs a
+      // different screen: asking a question is fine, but the camera button would fail
+      // every time until the pairing in the Meta AI app is done.
+      if captureSource == .glasses,
+         let wearablesViewModel,
+         wearablesViewModel.registrationState != .registered,
+         !wearablesViewModel.hasMockDevice {
+        HomeScreenView(viewModel: wearablesViewModel)
       } else {
-        Color.black.edgesIgnoringSafeArea(.all)
-      }
-    }
-    .task {
-      viewModel.onDecodedFrame = { [weak liveKit] pixelBuffer in
-        liveKit?.pushGlassesFrame(pixelBuffer)
-      }
-      if captureSource != .glasses && !intelligenceEngine.isDirect {
-        await liveKit.start()
-      }
-    }
-    .onChange(of: viewModel.streamingStatus) { status in
-      // Glasses mode: the call rides the DAT stream's lifecycle. Open the room
-      // only once frames are actually flowing (.streaming), so the buffer-track
-      // publish has a frame to settle its dimensions instead of timing out. A
-      // transient .waiting (glasses briefly asleep) keeps the call alive; only
-      // a real .stopped ends it. Gating on isStreaming (which is true during
-      // .waiting) opened the room before any frame and made the publish race.
-      // A direct engine (GigaChat/YandexGPT/local FastVLM) never opens a LiveKit
-      // room at all -- AskAssistantView drives StreamSessionViewModel only for
-      // on-demand photo capture.
-      guard captureSource == .glasses, !intelligenceEngine.isDirect else { return }
-      Task {
-        if status == .streaming {
-          await liveKit.start()
-        } else if status == .stopped, liveKit.isActive {
-          await liveKit.stop()
-        }
-      }
-    }
-    .onChange(of: intelligenceRaw) { newRaw in
-      // The brain is chosen at session start (room-token metadata), so a live
-      // call redials itself to apply the switch -- the user flips a toggle and
-      // three seconds later the other model picks up. Switching TO a direct
-      // engine (GigaChat/YandexGPT/local FastVLM) just hangs up instead --
-      // AskAssistantView takes over and never opens a room; switching AWAY
-      // from one dials in for the first time rather than redialing.
-      let newEngine = IntelligenceEngine(rawValue: newRaw) ?? .openai
-      Task {
-        if newEngine.isDirect {
-          if liveKit.isActive { await liveKit.stop() }
-        } else if liveKit.isActive {
-          await liveKit.stop()
-          await liveKit.start()
-        } else if captureSource != .glasses {
-          await liveKit.start()
-        }
-      }
-    }
-    .onChange(of: captureSourceRaw) { newRaw in
-      glassesAutoStarted = false
-      Task {
-        if intelligenceEngine.isDirect {
-          // AskAssistantView owns photo capture directly; no LiveKit room to swap.
-          return
-        }
-        if CaptureSource(rawValue: newRaw) != .glasses {
-          if viewModel.isStreaming { await viewModel.stopSession() }
-          await liveKit.start()
-        } else {
-          await liveKit.stop()
-        }
+        AskAssistantView(streamViewModel: viewModel)
       }
     }
     .alert("Error", isPresented: $viewModel.showError) {

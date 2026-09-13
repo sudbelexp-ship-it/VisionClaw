@@ -154,7 +154,7 @@ final class GigaChatDiagnostics: ObservableObject {
 
     private enum ConnectResult { case success, failure(String) }
 
-    private static func connect(host: String, port: UInt16, parameters: NWParameters) async -> ConnectResult {
+    private nonisolated static func connect(host: String, port: UInt16, parameters: NWParameters) async -> ConnectResult {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { return .failure("bad port") }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: parameters)
         let queue = DispatchQueue(label: "gigachat.diagnostics.connect")
@@ -187,7 +187,9 @@ final class GigaChatDiagnostics: ObservableObject {
         }
     }
 
-    private static func describe(_ error: NWError) -> String {
+    // nonisolated: NWConnection delivers state updates on its own queue, so the formatting helpers
+    // have to be callable from there. They touch no instance state, only their argument.
+    private nonisolated static func describe(_ error: NWError) -> String {
         switch error {
         case .posix(let code): return "POSIX \(code.rawValue) (\(code))"
         case .tls(let status): return "TLS OSStatus \(status) (\(tlsMeaning(status)))"
@@ -198,7 +200,7 @@ final class GigaChatDiagnostics: ObservableObject {
 
     /// The handful of Secure Transport codes that actually show up here; anything else is printed
     /// raw so it can be looked up rather than guessed at.
-    private static func tlsMeaning(_ status: OSStatus) -> String {
+    private nonisolated static func tlsMeaning(_ status: OSStatus) -> String {
         switch status {
         case -9807: return "invalid certificate chain"
         case -9808: return "invalid certificate"

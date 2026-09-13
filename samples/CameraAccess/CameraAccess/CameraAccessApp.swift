@@ -37,6 +37,9 @@ struct CameraAccessApp: App {
     // weights (the app would then re-download a GB+ at connect time). Must run before any
     // HubClient exists.
     FastVLMService.bootstrapModelStore()
+    // Loading also prunes: retention is enforced at launch so it holds even for
+    // someone who never opens the History screen.
+    Task { @MainActor in ConversationStore.shared.load() }
 
     var available: WearablesInterface?
     do {

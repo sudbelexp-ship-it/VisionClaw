@@ -20,6 +20,10 @@ struct ChatMessage: Identifiable, Equatable {
     let role: Role
     var text: String
     var image: UIImage?
+    /// Name of this photo's file in the history folder, assigned once when the message is created.
+    /// Without it every save would write the same picture again under a new name and the size cap
+    /// would be reached by duplicates rather than by conversations.
+    var imageFile: String?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool { lhs.id == rhs.id }
 }
@@ -48,6 +52,10 @@ struct AskAssistantView: View {
     @State private var isCapturingGlassesPhoto = false
     @State private var showSettings = false
     @State private var showTranslator = false
+    @State private var showHistory = false
+    /// Identity of the thread on disk. A new UUID per "New chat" so reopening history shows the
+    /// separate conversations the user actually had, not one endless log.
+    @State private var sessionId = UUID()
     @FocusState private var draftFocused: Bool
 
     private var engine: IntelligenceEngine {
@@ -84,6 +92,7 @@ struct AskAssistantView: View {
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .fullScreenCover(isPresented: $showTranslator) { LiveTranslatorView() }
+        .sheet(isPresented: $showHistory) { HistoryView() }
         .onChange(of: speechRecognizer.transcript) { newValue in
             if !newValue.isEmpty { draft = newValue }
         }
@@ -139,6 +148,12 @@ struct AskAssistantView: View {
                     Label("New chat", systemImage: "square.and.pencil")
                 }
                 .disabled(messages.isEmpty)
+
+                Button {
+                    showHistory = true
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
 
                 if let onConnectGlasses {
                     Button {
@@ -345,6 +360,40 @@ struct AskAssistantView: View {
         messages.removeAll()
         attachedImage = nil
         draft = ""
+        sessionId = UUID()
+    }
+
+    /// Mirror the on-screen thread into the history store. Called after every exchange rather than
+    /// on exit: a conversation abandoned mid-answer is exactly the one worth keeping, and an app
+    /// killed in the background never gets a closing callback.
+    private func persist() {
+        let store = ConversationStore.shared
+        let stored: [StoredMessage] = messages.map { message in
+            let role: StoredMessage.Role
+            switch message.role {
+            case .user: role = .user
+            case .assistant: role = .assistant
+            case .failure: role = .note
+            }
+            return StoredMessage(id: message.id, role: role, text: message.text,
+                                 imageFile: message.imageFile)
+        }
+        store.save(id: sessionId, kind: .chat, subtitle: engine.label, messages: stored)
+    }
+
+    /// What the backend gets as context. Errors are dropped (they are notes to the user, not turns
+    /// in the conversation) and the window is capped: the whole thread would grow the request
+    /// without bound and eventually exceed what the model accepts.
+    private var conversationHistory: [ChatTurn] {
+        messages.compactMap { message -> ChatTurn? in
+            switch message.role {
+            case .user: return ChatTurn(role: .user, text: message.text)
+            case .assistant: return ChatTurn(role: .assistant, text: message.text)
+            case .failure: return nil
+            }
+        }
+        .suffix(SettingsManager.shared.memoryTurns)
+        .map { $0 }
     }
 
     private func append(_ message: ChatMessage) {
@@ -427,21 +476,29 @@ struct AskAssistantView: View {
 
         // Post the question before the request starts. It used to sit in the input field until
         // the answer arrived, which looked like the send button had not registered at all.
-        append(.init(role: .user, text: text, image: image))
+        let imageFile = image.flatMap { ConversationStore.shared.storeImage($0, session: sessionId) }
+        append(.init(role: .user, text: text, image: image, imageFile: imageFile))
         draft = ""
         attachedImage = nil
 
         isAsking = true
         defer { isAsking = false }
 
+        // Snapshot before the new question is appended, so the model sees the conversation up to
+        // but not including the thing it is being asked right now.
+        let history = Array(conversationHistory.dropLast())
         let backend = DirectAIBackendRouter.backend(for: engine)
         do {
-            let answer = try await backend.ask(text: text, imageData: image?.jpegData(compressionQuality: 0.85))
+            let answer = try await backend.ask(
+                text: text,
+                imageData: image?.jpegData(compressionQuality: 0.85),
+                history: history)
             append(.init(role: .assistant, text: answer))
             speechSynthesizer.speak(answer)
         } catch {
             append(.init(role: .failure, text: error.localizedDescription))
         }
+        persist()
     }
 }
 

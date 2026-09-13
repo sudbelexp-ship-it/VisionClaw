@@ -11,6 +11,7 @@ struct SettingsView: View {
   @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.automatic.rawValue
   @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
   @AppStorage(SettingsManager.speechLocaleKey) private var speechLocaleRaw = ""
+  @AppStorage(SettingsManager.memoryTurnsKey) private var memoryTurns = 6
 
   private var cameraFooter: String {
     switch CaptureSource(rawValue: captureSourceRaw) ?? .automatic {
@@ -70,6 +71,23 @@ struct SettingsView: View {
             }
           }
           .pickerStyle(.menu)
+        }
+
+        Section {
+          Picker("Remember", selection: $memoryTurns) {
+            Text("Off").tag(0)
+            Text("Last 4 messages").tag(4)
+            Text("Last 6 messages").tag(6)
+            Text("Last 10 messages").tag(10)
+          }
+          .pickerStyle(.menu)
+        } header: {
+          Text("Conversation memory")
+        } footer: {
+          Text("GigaChat and YandexGPT keep nothing between requests, so whatever you pick here is "
+               + "re-sent — and re-billed — with every single question. More memory means better "
+               + "follow-ups and a higher cost per question. The on-device model is free either way. "
+               + "Switching models always starts a fresh chat.")
         }
 
         Section(header: Text("Voice input"), footer: Text(speechFooter)) {

@@ -51,6 +51,8 @@
 		C4E81A730B9D26F5A1073FEC /* LiveTranslatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */; };
 		F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */; };
 		6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */; };
+		5A1D8E62B037F4C9A2E61D08 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E430A75C6182BD40F7A3E61 /* HistoryView.swift */; };
+		3F7A2C18D460B9E5714CA09B /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */; };
 		A31C7E5048B2F09D6C41DA77 /* GigaChatDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7409D22E5163CA84F80B215 /* GigaChatDiagnostics.swift */; };
 		D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */; };
 		5D7F2712092B574D9E4B558B /* russian_trusted_root_ca.pem in Resources */ = {isa = PBXBuildFile; fileRef = C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */; };
@@ -130,6 +132,8 @@
 		D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslatorView.swift; sourceTree = "<group>"; };
 		8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMTranslator.swift; sourceTree = "<group>"; };
 		A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimultaneousInterpreter.swift; sourceTree = "<group>"; };
+		9E430A75C6182BD40F7A3E61 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStore.swift; sourceTree = "<group>"; };
 		B7409D22E5163CA84F80B215 /* GigaChatDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatDiagnostics.swift; sourceTree = "<group>"; };
 		28F29AAB6E9F7A7D99ED8982 /* GigaChatSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatSettingsView.swift; sourceTree = "<group>"; };
 		C9A7F912343206779B3A542A /* russian_trusted_root_ca.pem */ = {isa = PBXFileReference; lastKnownFileType = text; path = russian_trusted_root_ca.pem; sourceTree = "<group>"; };
@@ -237,6 +241,7 @@
 				CEEFD295486ECBDD4BE9D057 /* YandexGPT */,
 				3104366488BA8FAC1039BA51 /* LocalMLX */,
 				E71F4A8C2D6B35904A1CE8B7 /* Translator */,
+				B60C9F3A248E17D5CA903B42 /* History */,
 				50B9E8D4F6E58DCD2AABC59C /* Ask */,
 				8FD96B702E6F0A9800F56AB1 /* ViewModels */,
 				8FD96B762E6F0A9800F56AB1 /* Views */,
@@ -339,6 +344,15 @@
 				E66D30232E7DA71900470B48 /* MockDeviceKitButton.swift */,
 			);
 			path = MockDeviceKit;
+			sourceTree = "<group>";
+		};
+		B60C9F3A248E17D5CA903B42 /* History */ = {
+			isa = PBXGroup;
+			children = (
+				C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */,
+				9E430A75C6182BD40F7A3E61 /* HistoryView.swift */,
+			);
+			path = History;
 			sourceTree = "<group>";
 		};
 		E71F4A8C2D6B35904A1CE8B7 /* Translator */ = {
@@ -500,6 +514,8 @@
 				C4E81A730B9D26F5A1073FEC /* LiveTranslatorView.swift in Sources */,
 				F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */,
 				6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */,
+				5A1D8E62B037F4C9A2E61D08 /* HistoryView.swift in Sources */,
+				3F7A2C18D460B9E5714CA09B /* ConversationStore.swift in Sources */,
 				A31C7E5048B2F09D6C41DA77 /* GigaChatDiagnostics.swift in Sources */,
 				D354FBFC0645CB0EB14D24C6 /* GigaChatSettingsView.swift in Sources */,
 				11FD173E69C64E17E0137C1C /* YandexGPTService.swift in Sources */,

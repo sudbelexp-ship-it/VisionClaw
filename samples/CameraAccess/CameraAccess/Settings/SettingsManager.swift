@@ -165,6 +165,21 @@ final class SettingsManager {
     set { defaults.set(newValue.rawValue, forKey: CaptureSource.defaultsKey) }
   }
 
+  /// How many earlier turns to send back with each question.
+  ///
+  /// This is a recurring cost, not a one-off: GigaChat and YandexGPT are stateless HTTP APIs, so
+  /// the whole window is re-uploaded on EVERY request, and each turn is billed again every time it
+  /// is included. Zero disables memory entirely and makes each question as cheap as it can be.
+  static let memoryTurnsKey = "conversationMemoryTurns"
+
+  var memoryTurns: Int {
+    get {
+      guard defaults.object(forKey: Self.memoryTurnsKey) != nil else { return 6 }
+      return defaults.integer(forKey: Self.memoryTurnsKey)
+    }
+    set { defaults.set(newValue, forKey: Self.memoryTurnsKey) }
+  }
+
   /// Dictation language for the Ask screen's mic, as a locale identifier ("ru-RU"). Empty means
   /// "follow the phone". Needed as an explicit choice because guessing it from the app's own
   /// locale is wrong: this app ships English strings only, so `Locale.current` reports en-US even

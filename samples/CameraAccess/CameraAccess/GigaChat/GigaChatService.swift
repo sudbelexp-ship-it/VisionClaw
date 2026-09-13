@@ -18,9 +18,8 @@ actor GigaChatService {
 
     private init() {}
 
-    /// Ask GigaChat a question, optionally about a photo. One-shot: no conversation history is
-    /// sent or kept — each call is a fresh turn.
-    func ask(text: String, imageData: Data?) async throws -> String {
+    /// Ask GigaChat a question, optionally about a photo, with earlier turns for context.
+    func ask(text: String, imageData: Data?, history: [ChatTurn] = []) async throws -> String {
         let authKey = SettingsManager.shared.gigaChatAuthKey
         guard !authKey.isEmpty else { throw GigaChatError.notConfigured }
 
@@ -53,6 +52,9 @@ actor GigaChatService {
         let system = SettingsManager.shared.gigaChatSystemPrompt
         if !system.isEmpty {
             messages.append(["role": "system", "content": system])
+        }
+        for turn in history {
+            messages.append(["role": turn.role.rawValue, "content": turn.text])
         }
         var userMessage: [String: Any] = ["role": "user", "content": userText]
         if let attachments {

@@ -26,8 +26,8 @@ actor YandexGPTService {
 
     private init() {}
 
-    /// Ask YandexGPT a question, optionally about a photo. One-shot: no conversation history.
-    func ask(text: String, imageData: Data?) async throws -> String {
+    /// Ask YandexGPT a question, optionally about a photo, with earlier turns for context.
+    func ask(text: String, imageData: Data?, history: [ChatTurn] = []) async throws -> String {
         let apiKey = SettingsManager.shared.yandexGPTApiKey
         let folderId = SettingsManager.shared.yandexGPTFolderId
         guard !apiKey.isEmpty, !folderId.isEmpty else { throw YandexGPTError.notConfigured }
@@ -46,10 +46,12 @@ actor YandexGPTService {
             content = text
         }
 
-        let payload: [String: Any] = [
-            "model": model,
-            "messages": [["role": "user", "content": content]],
-        ]
+        // Earlier turns go in as plain text messages ahead of the current one; the current turn
+        // is the only one that may carry an image.
+        var messages: [[String: Any]] = history.map { ["role": $0.role.rawValue, "content": $0.text] }
+        messages.append(["role": "user", "content": content])
+
+        let payload: [String: Any] = ["model": model, "messages": messages]
         let body = try JSONSerialization.data(withJSONObject: payload)
 
         var request = URLRequest(url: URL(string: "https://ai.api.cloud.yandex.net/v1/chat/completions")!)

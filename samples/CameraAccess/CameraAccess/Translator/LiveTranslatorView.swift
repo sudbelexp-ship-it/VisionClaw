@@ -134,6 +134,10 @@ struct LiveTranslatorView: View {
     @State private var configuration: TranslationSession.Configuration?
     @State private var isDownloadingModel = false
     @State private var showEngineSheet = false
+    @State private var sessionId = UUID()
+    /// Chunks already written to disk, so a long session isn't rewritten from scratch every time
+    /// one more line arrives -- that would be quadratic on a conversation of any length.
+    @State private var persistedCount = 0
 
     private var source: TranslatorLanguage {
         TranslatorLanguage.sources.first { $0.id == sourceId } ?? TranslatorLanguage.sources[0]
@@ -163,11 +167,19 @@ struct LiveTranslatorView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") {
                         interpreter.stop()
+                        persist(force: true)
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { interpreter.clear() } label: { Image(systemName: "trash") }
+                    Button {
+                        // Clearing starts a separate recording rather than erasing the saved one:
+                        // what is already on disk is the record of a conversation that happened.
+                        persist(force: true)
+                        interpreter.clear()
+                        sessionId = UUID()
+                        persistedCount = 0
+                    } label: { Image(systemName: "trash") }
                         .disabled(interpreter.chunks.isEmpty)
                 }
             }
@@ -194,6 +206,7 @@ struct LiveTranslatorView: View {
                                 isFragment: true)
                         }
                         interpreter.complete(id, with: text, language: target.id, speak: speakAloud)
+                        persist(force: false)
                     }
                 } catch {
                     interpreter.errorText = error.localizedDescription
@@ -211,6 +224,24 @@ struct LiveTranslatorView: View {
                 }
             }
         }
+    }
+
+    /// Write the session to history. Throttled while interpreting -- every tenth line is often
+    /// enough to survive a crash, and a full rewrite per line would cost more than the translation.
+    private func persist(force: Bool) {
+        let chunks = interpreter.chunks.filter { $0.translated != nil }
+        guard !chunks.isEmpty else { return }
+        guard force || chunks.count - persistedCount >= 10 else { return }
+        persistedCount = chunks.count
+        let messages = chunks.flatMap { chunk -> [StoredMessage] in
+            [
+                StoredMessage(role: .user, text: chunk.original),
+                StoredMessage(role: .assistant, text: chunk.translated ?? ""),
+            ]
+        }
+        ConversationStore.shared.save(id: sessionId, kind: .interpreter,
+                                      subtitle: "\(source.name) → \(target.name)",
+                                      messages: messages)
     }
 
     private func applyPace() {
@@ -379,6 +410,7 @@ struct LiveTranslatorView: View {
                     } else {
                         await interpreter.start(source: source)
                     }
+                    if !interpreter.isRunning { persist(force: true) }
                 }
             } label: {
                 Label(interpreter.isRunning ? "Stop" : "Start interpreting",

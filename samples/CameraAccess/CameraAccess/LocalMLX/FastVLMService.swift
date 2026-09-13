@@ -186,10 +186,10 @@ final class FastVLMService: ObservableObject {
 
     // MARK: - Generation
 
-    /// Ask a question, optionally about a photo. One-shot: no conversation history is sent or
-    /// kept — each call is a fresh turn (VisionClaw's interaction model is a single "ask" button,
-    /// not a running conversation).
-    func ask(text: String, imageData: Data?) async throws -> String {
+    /// Ask a question, optionally about a photo, with earlier turns of the same conversation for
+    /// context. History is text only: FastVLM 0.5B has a small context window, and re-feeding old
+    /// images would spend most of it on pictures it has already described.
+    func ask(text: String, imageData: Data?, history: [ChatTurn] = []) async throws -> String {
         guard UIApplication.shared.applicationState != .background else { throw FastVLMError.backgrounded }
         // Load on first use. Nothing else in the app calls connect(), so requiring it here just
         // made every question fail with "model isn't loaded" on a model that was sitting fully
@@ -219,6 +219,11 @@ final class FastVLMService: ObservableObject {
         }
 
         var chat: [Chat.Message] = [.init(role: .system, content: systemContent)]
+        // Only the last few turns: this model's context window is small enough that a long history
+        // would crowd out the image tokens that matter most.
+        for turn in history.suffix(4) {
+            chat.append(.init(role: turn.role == .user ? .user : .assistant, content: turn.text))
+        }
         if let visionImage {
             chat.append(.init(role: .user, content: text, images: [.ciImage(visionImage)]))
         } else {

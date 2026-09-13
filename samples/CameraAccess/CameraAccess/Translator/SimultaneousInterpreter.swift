@@ -19,12 +19,12 @@
 //    and is asked for the continuation only -- so the output joins up instead of restarting.
 //
 // 3. OUR OWN VOICE GOING BACK INTO THE MICROPHONE.
-//    The whole point is that playback and capture overlap, which is a feedback loop. Two defences:
-//    the synthesised speech is rendered through this same AVAudioEngine (rather than played by
-//    AVSpeechSynthesizer on its own path), so the engine's voice processing has it as a reference
-//    signal and can cancel it out of the microphone; and voice processing is switched on for both
-//    the input and output nodes. Headphones or the glasses make it a non-issue; this makes the
-//    phone's own speaker survivable.
+//    The whole point is that playback and capture overlap, which is a feedback loop. With the
+//    glasses or headphones connected the separation is physical and nothing else is needed, so the
+//    audio simply goes there at full quality. Only when it falls back to the phone's own speaker
+//    is echo cancellation switched on: the synthesised speech is then rendered through this same
+//    AVAudioEngine (rather than played by AVSpeechSynthesizer on its own path) so voice processing
+//    has it as a reference signal and can subtract it from the microphone.
 
 import AVFoundation
 import Foundation
@@ -132,6 +132,9 @@ final class SimultaneousInterpreter: ObservableObject {
     @Published private(set) var chunks: [InterpretedChunk] = []
     @Published var errorText: String?
     @Published var echoCancellationActive = false
+    /// Where the translation is actually coming out. Surfaced because on a glasses app "why is it
+    /// talking out of the phone" is the first thing anyone asks.
+    @Published private(set) var outputRouteName = ""
 
     /// Words that must accumulate before a chunk is sent. Lower reacts sooner but gives the
     /// translator less to work with, which costs accuracy on languages that reorder heavily.
@@ -153,6 +156,7 @@ final class SimultaneousInterpreter: ObservableObject {
     /// How many words of the current recognition task have already been sent downstream.
     private var committedCount = 0
     private var holdTimer: Timer?
+    private var routeObserver: NSObjectProtocol?
     private var source = TranslatorLanguage.sources[0]
 
     private(set) lazy var pending: AsyncStream<UUID> = AsyncStream { self.pendingContinuation = $0 }
@@ -179,25 +183,38 @@ final class SimultaneousInterpreter: ObservableObject {
 
         do {
             let session = AVAudioSession.sharedInstance()
+            // No .defaultToSpeaker. That option pins playback to the built-in speaker for the whole
+            // category, which overrode the glasses and the headphones -- the translation came out
+            // of the phone even with a headset connected. Routing is decided below instead, from
+            // what is actually plugged in or paired.
             // .allowBluetoothA2DP keeps playback in stereo on the glasses while capture stays on
-            // the phone's own microphone. HFP would drag both down to telephone quality.
+            // the phone's own microphone; HFP would drag both down to telephone quality.
             try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
+                                    options: [.duckOthers, .allowBluetoothA2DP])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
                 try? session.setPreferredInput(builtIn)
             }
+            applyOutputRoute()
+            observeRouteChanges()
 
-            // Voice processing must be enabled before the engine starts and before the formats are
-            // read: turning it on changes the node's format. If the hardware refuses, carry on
-            // without it -- with headphones it was never doing much anyway.
-            do {
-                try engine.inputNode.setVoiceProcessingEnabled(true)
-                try engine.outputNode.setVoiceProcessingEnabled(true)
-                echoCancellationActive = true
-            } catch {
+            // Echo cancellation is only worth its cost when there is nothing between the speaker
+            // and the microphone. With a headset the separation is physical, and voice processing
+            // would trade away audio quality for a problem that no longer exists -- so it is
+            // switched on only when falling back to the phone's own speaker.
+            if Self.hasExternalOutput(session) {
                 echoCancellationActive = false
-                NSLog("[VisionClaw] voice processing unavailable: %@", "\(error)")
+            } else {
+                do {
+                    // Must happen before the engine starts and before any format is read: enabling
+                    // it changes the node's format.
+                    try engine.inputNode.setVoiceProcessingEnabled(true)
+                    try engine.outputNode.setVoiceProcessingEnabled(true)
+                    echoCancellationActive = true
+                } catch {
+                    echoCancellationActive = false
+                    NSLog("[VisionClaw] voice processing unavailable: %@", "\(error)")
+                }
             }
 
             voice.attach(to: engine)
@@ -210,7 +227,43 @@ final class SimultaneousInterpreter: ObservableObject {
         }
     }
 
+    /// Anything that isn't the phone's own speaker or earpiece: headphones, the glasses, AirPods,
+    /// CarPlay. When one is present it should get the audio, and it needs no echo cancellation.
+    nonisolated static func hasExternalOutput(_ session: AVAudioSession) -> Bool {
+        session.currentRoute.outputs.contains { output in
+            output.portType != .builtInSpeaker && output.portType != .builtInReceiver
+        }
+    }
+
+    /// Send the translation to a headset if there is one, and to the loudspeaker if there isn't.
+    /// Without the override, .playAndRecord with no headset plays out of the earpiece, which is too
+    /// quiet to use with the phone on a table.
+    private func applyOutputRoute() {
+        let session = AVAudioSession.sharedInstance()
+        if Self.hasExternalOutput(session) {
+            try? session.overrideOutputAudioPort(.none)
+        } else {
+            try? session.overrideOutputAudioPort(.speaker)
+        }
+        outputRouteName = session.currentRoute.outputs.first?.portName ?? ""
+    }
+
+    /// Glasses that connect, disconnect or fall asleep mid-conversation change the route underneath
+    /// us; without this the audio would stay wherever it was when Start was pressed.
+    private func observeRouteChanges() {
+        guard routeObserver == nil else { return }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.applyOutputRoute() }
+        }
+    }
+
     func stop() {
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
         holdTimer?.invalidate()
         holdTimer = nil
         voice.stop()

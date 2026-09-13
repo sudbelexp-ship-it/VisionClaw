@@ -90,8 +90,17 @@ final class SpeechRecognizerOneShot: ObservableObject {
         // Mode stays .default rather than .measurement so iOS keeps its input gain/noise
         // processing, which dictation depends on.
         try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.duckOthers, .defaultToSpeaker, .allowBluetoothA2DP])
+                                options: [.duckOthers, .allowBluetoothA2DP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+        // .defaultToSpeaker used to be in the options above; it pins playback to the built-in
+        // speaker for the whole category, which overrides connected glasses or headphones. Force
+        // the loudspeaker only when there is genuinely nothing else, otherwise .playAndRecord
+        // plays out of the earpiece, which is too quiet to use.
+        if SimultaneousInterpreter.hasExternalOutput(session) {
+            try? session.overrideOutputAudioPort(.none)
+        } else {
+            try? session.overrideOutputAudioPort(.speaker)
+        }
         if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
             try? session.setPreferredInput(builtIn)
         }

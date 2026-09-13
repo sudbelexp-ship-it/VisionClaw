@@ -457,12 +457,20 @@ struct LiveTranslatorView: View {
 
                 if translationEngine == .localLLM {
                     Section {
-                        Picker("Model", selection: Binding(get: { llm.tier }, set: { llm.tier = $0 })) {
-                            ForEach(TranslatorModelTier.allCases) { tier in
-                                Text("\(tier.label) · \(tier.sizeText)").tag(tier)
+                        ForEach(TranslatorModelTier.allCases) { tier in
+                            Button {
+                                llm.tier = tier
+                            } label: {
+                                HStack {
+                                    Text("\(tier.label) · \(tier.sizeText)")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if llm.tier == tier {
+                                        Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                    }
+                                }
                             }
                         }
-                        .pickerStyle(.inline)
 
                         if llm.isDownloaded {
                             Label("Downloaded", systemImage: "checkmark.circle.fill")
@@ -500,15 +508,22 @@ struct LiveTranslatorView: View {
                 }
 
                 Section {
-                    Label(interpreter.echoCancellationActive
-                          ? "Echo cancellation on" : "Echo cancellation unavailable",
-                          systemImage: interpreter.echoCancellationActive ? "checkmark.circle" : "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(interpreter.echoCancellationActive ? .green : .secondary)
+                    HStack {
+                        Label("Playing to", systemImage: "speaker.wave.2")
+                        Spacer()
+                        Text(interpreter.outputRouteName.isEmpty ? "—" : interpreter.outputRouteName)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    if interpreter.echoCancellationActive {
+                        Label("Echo cancellation on", systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 } footer: {
-                    Text("The translation plays while the other person is still talking, so the "
-                         + "microphone would otherwise pick up this phone's own voice. Wearing the "
-                         + "glasses or earphones removes the problem entirely.")
+                    Text("With the glasses or earphones connected the translation goes there and "
+                         + "keeps full audio quality. On the phone's own speaker it would be picked "
+                         + "back up by the microphone, so echo cancellation switches on instead.")
                 }
             }
             .navigationTitle("Translation engine")

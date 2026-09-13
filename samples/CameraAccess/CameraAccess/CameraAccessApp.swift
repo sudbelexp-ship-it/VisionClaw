@@ -18,6 +18,7 @@
 import Foundation
 import MWDATCore
 import SwiftUI
+import UserNotifications
 
 #if canImport(MWDATMockDevice)
 import MWDATMockDevice
@@ -31,6 +32,31 @@ struct CameraAccessApp: App {
   /// experience does not depend on it.
   private let wearables: WearablesInterface?
 
+  /// Cancel the engagement nudges inherited from the upstream pilot study.
+  ///
+  /// The code that scheduled them ("Look around. Anything you're curious about?", every two hours
+  /// from 10:00 to 20:00) was deleted, but deleting code does not unschedule notifications: iOS
+  /// keeps pending local notifications until something cancels them or the app is removed. Anyone
+  /// who ran an earlier build would otherwise keep getting them for as long as they kept the app.
+  /// Matched by the identifier prefix the old scheduler used, so nothing else is touched.
+  private static func cancelInheritedNudges() {
+    let center = UNUserNotificationCenter.current()
+    center.getPendingNotificationRequests { requests in
+      let stale = requests.map(\.identifier).filter { $0.hasPrefix("engagement-nudge-") }
+      guard !stale.isEmpty else { return }
+      center.removePendingNotificationRequests(withIdentifiers: stale)
+      NSLog("[VisionClaw] cancelled %d inherited engagement nudges", stale.count)
+    }
+    // Ones already sitting in Notification Centre need clearing separately -- cancelling a
+    // pending request does nothing to a notification that has already been delivered.
+    center.getDeliveredNotifications { delivered in
+      let stale = delivered.map(\.request.identifier)
+        .filter { $0.hasPrefix("engagement-nudge-") }
+      guard !stale.isEmpty else { return }
+      center.removeDeliveredNotifications(withIdentifiers: stale)
+    }
+  }
+
   init() {
     // Move the FastVLM model store OUT of Caches before anything touches the HuggingFace hub —
     // iOS may purge Caches under storage pressure, which would silently delete downloaded model
@@ -40,6 +66,7 @@ struct CameraAccessApp: App {
     // Loading also prunes: retention is enforced at launch so it holds even for
     // someone who never opens the History screen.
     Task { @MainActor in ConversationStore.shared.load() }
+    Self.cancelInheritedNudges()
 
     var available: WearablesInterface?
     do {

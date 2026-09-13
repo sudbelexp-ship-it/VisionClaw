@@ -21,10 +21,10 @@ struct YandexGPTSettingsView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("API Key")
+                    Text("API-ключ")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    SecureField("Api-Key from Yandex Cloud", text: $apiKey)
+                    SecureField("Api-Key из Яндекс Облака", text: $apiKey)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
                 }
@@ -38,19 +38,19 @@ struct YandexGPTSettingsView: View {
                         .font(.system(.body, design: .monospaced))
                 }
             } header: {
-                Text("Authorization")
+                Text("Авторизация")
             } footer: {
                 if apiKey.isEmpty || folderId.isEmpty {
-                    Label("Both fields are required for the YandexGPT backend", systemImage: "exclamationmark.triangle.fill")
+                    Label("Нужны оба поля, иначе YandexGPT не ответит", systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange).font(.caption)
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Configured", systemImage: "checkmark.circle.fill")
+                        Label("Настроено", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green).font(.caption)
                         // The single most common mistake: typing a folder NAME (like "dev")
                         // where Yandex wants the folder's ID. The API rejects that with a 403,
                         // which reads like a broken key even though the key is fine.
-                        Text("Folder ID is the b1g… identifier from the Yandex Cloud console — not the folder's name.")
+                        Text("Folder ID — это идентификатор вида b1g… из консоли Яндекс Облака, а не название папки.")
                             .font(.caption)
                     }
                 }
@@ -64,7 +64,7 @@ struct YandexGPTSettingsView: View {
                         if isChecking {
                             ProgressView().padding(.trailing, 4)
                         }
-                        Text("Test connection")
+                        Text("Проверить подключение")
                     }
                 }
                 .disabled(apiKey.isEmpty || folderId.isEmpty || isChecking)
@@ -72,7 +72,7 @@ struct YandexGPTSettingsView: View {
                 if let checkResult {
                     switch checkResult {
                     case .success:
-                        Label("Connected", systemImage: "checkmark.circle.fill")
+                        Label("Подключено", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
                     case .failure(let message):
                         VStack(alignment: .leading, spacing: 10) {
@@ -87,7 +87,7 @@ struct YandexGPTSettingsView: View {
                                     saveSettings()
                                     checkConnection()
                                 } label: {
-                                    Label("Use \(suggested)", systemImage: "wand.and.stars")
+                                    Label("Подставить \(suggested)", systemImage: "wand.and.stars")
                                 }
                             }
                         }
@@ -98,15 +98,15 @@ struct YandexGPTSettingsView: View {
             Section {
                 Link(destination: URL(string: "https://aistudio.yandex.ru")!) {
                     HStack {
-                        Text("Get an API key")
+                        Text("Получить ключ")
                         Spacer()
                         Image(systemName: "arrow.up.right.square").foregroundColor(.secondary)
                     }
                 }
             } header: {
-                Text("Help")
+                Text("Помощь")
             } footer: {
-                Text("YandexGPT is Yandex Cloud's text + vision backend, via an OpenAI-compatible API. Vision uses a hosted Qwen multimodal model.")
+                Text("YandexGPT — текст и зрение от Яндекс Облака через OpenAI-совместимый API. За зрение отвечает размещённая у них мультимодальная модель Qwen.")
             }
         }
         .navigationTitle("YandexGPT")

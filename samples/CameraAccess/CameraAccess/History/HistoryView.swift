@@ -8,7 +8,14 @@
 import SwiftUI
 
 struct HistoryView: View {
-    @Environment(\.dismiss) private var dismiss
+    static func icon(for kind: StoredSession.Kind) -> String {
+        switch kind {
+        case .chat: return "bubble.left.and.bubble.right"
+        case .interpreter: return "character.bubble"
+        case .live: return "dot.radiowaves.left.and.right"
+        }
+    }
+
     @StateObject private var store = ConversationStore.shared
     @State private var showSettings = false
 
@@ -33,14 +40,15 @@ struct HistoryView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("History")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("История")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Хранение")
                 }
             }
             .sheet(isPresented: $showSettings) { HistorySettingsView() }
@@ -53,8 +61,8 @@ struct HistoryView: View {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Nothing saved yet").font(.headline)
-            Text("Chats and interpreting sessions are kept on this phone for \(store.retentionDays) days.")
+            Text("Пока ничего не сохранено").font(.headline)
+            Text("Чаты и сеансы перевода хранятся на телефоне \(store.retentionDays) дней.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -64,7 +72,7 @@ struct HistoryView: View {
 
     private func row(_ session: StoredSession) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: session.kind == .chat ? "bubble.left.and.bubble.right" : "character.bubble")
+            Image(systemName: Self.icon(for: session.kind))
                 .font(.system(size: 16))
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
@@ -155,50 +163,50 @@ struct HistorySettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Keep for", selection: $days) {
-                        Text("3 days").tag(3)
-                        Text("1 week").tag(7)
-                        Text("2 weeks").tag(14)
-                        Text("1 month").tag(30)
+                    Picker("Хранить", selection: $days) {
+                        Text("3 дня").tag(3)
+                        Text("Неделю").tag(7)
+                        Text("2 недели").tag(14)
+                        Text("Месяц").tag(30)
                     }
-                    Picker("Size limit", selection: $megabytes) {
+                    Picker("Лимит размера", selection: $megabytes) {
                         Text("100 MB").tag(100)
                         Text("250 MB").tag(250)
                         Text("500 MB").tag(500)
                         Text("1 GB").tag(1000)
                     }
                 } header: {
-                    Text("Retention")
+                    Text("Хранение")
                 } footer: {
                     // Both limits apply, and saying so matters: someone who sets a month and then
                     // finds a fortnight-old conversation gone would otherwise think it a bug.
-                    Text("Whichever comes first. Conversations past the age are removed; if what's "
-                         + "left is still over the size limit, the oldest go until it fits.")
+                    Text("Действуют оба сразу. Сначала удаляется всё старше срока; если "
+                         + "оставшееся всё ещё больше лимита, уходят самые старые, пока не уложится.")
                 }
 
                 Section {
                     HStack {
-                        Text("Used")
+                        Text("Занято")
                         Spacer()
                         Text(ByteCountFormatter.string(fromByteCount: store.usedBytes, countStyle: .file))
                             .foregroundStyle(.secondary)
                     }
-                    Button("Delete all history", role: .destructive) { confirmDelete = true }
+                    Button("Удалить всю историю", role: .destructive) { confirmDelete = true }
                 } footer: {
-                    Text("Photos are saved at reduced size — roughly 150 KB each rather than the "
-                         + "several megabytes the camera produces.")
+                    Text("Фотографии сохраняются уменьшенными — около 150 КБ вместо нескольких "
+                         + "мегабайт с камеры.")
                 }
             }
-            .navigationTitle("History")
+            .navigationTitle("Хранение")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } }
             }
-            .alert("Delete all history?", isPresented: $confirmDelete) {
-                Button("Delete", role: .destructive) { store.deleteAll() }
-                Button("Cancel", role: .cancel) {}
+            .alert("Удалить всю историю?", isPresented: $confirmDelete) {
+                Button("Удалить", role: .destructive) { store.deleteAll() }
+                Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Every saved chat and interpreting session is removed from this phone. This can't be undone.")
+                Text("С телефона исчезнут все сохранённые чаты и сеансы перевода. Отменить будет нельзя.")
             }
             .onChange(of: days) { _, _ in store.prune() }
             .onChange(of: megabytes) { _, _ in store.prune() }

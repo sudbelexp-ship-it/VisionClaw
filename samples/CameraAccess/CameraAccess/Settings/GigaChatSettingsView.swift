@@ -27,21 +27,21 @@ struct GigaChatSettingsView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Authorization Key")
+                    Text("Ключ авторизации")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    SecureField("key from your developers.sber.ru account", text: $authKey)
+                    SecureField("ключ из кабинета developers.sber.ru", text: $authKey)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
                 }
             } header: {
-                Text("Authorization")
+                Text("Авторизация")
             } footer: {
                 if authKey.isEmpty {
-                    Label("Required for the GigaChat backend", systemImage: "exclamationmark.triangle.fill")
+                    Label("Без ключа GigaChat не работает", systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange).font(.caption)
                 } else {
-                    Label("Key set", systemImage: "checkmark.circle.fill")
+                    Label("Ключ задан", systemImage: "checkmark.circle.fill")
                         .foregroundColor(.green).font(.caption)
                 }
             }
@@ -54,7 +54,7 @@ struct GigaChatSettingsView: View {
                         if isChecking {
                             ProgressView().padding(.trailing, 4)
                         }
-                        Text("Test connection")
+                        Text("Проверить подключение")
                     }
                 }
                 .disabled(authKey.isEmpty || isChecking)
@@ -62,7 +62,7 @@ struct GigaChatSettingsView: View {
                 if let checkResult {
                     switch checkResult {
                     case .success(let modelCount):
-                        Label("Connected (\(modelCount) models available)", systemImage: "checkmark.circle.fill")
+                        Label("Подключено, моделей доступно: \(modelCount)", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
                     case .failure(let message):
                         Label(message, systemImage: "xmark.circle.fill")
@@ -72,45 +72,45 @@ struct GigaChatSettingsView: View {
 
                 // "Test connection" can only ever say yes or no. When it says no, this is the
                 // screen that says which of the five possible causes it was.
-                NavigationLink("Diagnostics") {
+                NavigationLink("Диагностика") {
                     GigaChatDiagnosticsView()
                 }
             }
 
             Section {
-                TextField("Vision model", text: $visionModel)
+                TextField("Модель для фото", text: $visionModel)
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
-                TextField("Text model", text: $textModel)
+                TextField("Модель для текста", text: $textModel)
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
             } header: {
-                Text("Models")
+                Text("Модели")
             } footer: {
-                Text("Defaults: GigaChat-2-Max for photos, GigaChat-2-Pro for text.")
+                Text("По умолчанию: GigaChat-2-Max для фото, GigaChat-2-Pro для текста.")
             }
 
             Section {
                 TextEditor(text: $systemPrompt)
                     .frame(minHeight: 100)
             } header: {
-                Text("System prompt")
+                Text("Системный промпт")
             } footer: {
-                Text("Sent before every request. Keep it short — the reply is spoken aloud.")
+                Text("Отправляется перед каждым запросом. Держите коротким — ответ читается вслух.")
             }
 
             Section {
                 Link(destination: URL(string: "https://developers.sber.ru/studio")!) {
                     HStack {
-                        Text("Get an Authorization Key")
+                        Text("Получить ключ")
                         Spacer()
                         Image(systemName: "arrow.up.right.square").foregroundColor(.secondary)
                     }
                 }
             } header: {
-                Text("Help")
+                Text("Помощь")
             } footer: {
-                Text("GigaChat is Sber's cloud text + vision backend. Requests are serialized — the Freemium tier serves one at a time.")
+                Text("GigaChat — облачный текст и зрение от Сбера. Запросы идут строго по одному: тариф Freemium больше одновременно не обслуживает.")
             }
         }
         .navigationTitle("GigaChat")

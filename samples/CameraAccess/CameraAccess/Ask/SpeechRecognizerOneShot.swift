@@ -24,9 +24,7 @@ final class SpeechRecognizerOneShot: ObservableObject {
     /// the no-audio message because on a glasses app the input route is very often the surprise.
     @Published private(set) var inputRouteName: String?
 
-    private let audioEngine = AVAudioEngine()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
+    private var listener: AudioCaptureHub.Listener?
     /// Loudest sample seen this session. Distinguishes "recognizer heard nothing useful" from
     /// "the microphone handed us pure silence", which have completely different fixes.
     private var peakLevel: Float = 0
@@ -49,110 +47,40 @@ final class SpeechRecognizerOneShot: ObservableObject {
         return Locale.current
     }
 
-    /// A recognizer for `activeLocale()`, falling back to the bare language ("ru" when "ru-RU"
-    /// isn't offered) and finally to whatever the system will give us, so a missing language pack
-    /// degrades instead of dead-ending.
-    private static func makeRecognizer() -> SFSpeechRecognizer? {
-        let wanted = activeLocale()
-        var candidates = [wanted]
-        if let code = wanted.language.languageCode?.identifier {
-            candidates.append(Locale(identifier: code))
-        }
-        for locale in candidates {
-            if let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable {
-                return recognizer
-            }
-        }
-        return nil
-    }
-
-    /// Starts listening. Throws if speech recognition or microphone permission is denied, or the
-    /// recognizer isn't available (e.g. no network, on a locale requiring one).
+    /// Starts listening. Throws if permission is denied or the chosen language has no recogniser.
     func start() async throws {
         guard !isListening else { return }
         lastError = nil
         let speechStatus = await requestSpeechAuthorization()
         guard speechStatus == .authorized else { throw SpeechError.notAuthorized }
         guard await requestMicrophoneAuthorization() else { throw SpeechError.notAuthorized }
-        guard let recognizer = Self.makeRecognizer(), recognizer.isAvailable else {
-            throw SpeechError.unavailable(language: Self.activeLocale().identifier)
-        }
 
         transcript = ""
         peakLevel = 0
         sawAnyResult = false
 
-        let session = AVAudioSession.sharedInstance()
-        // No .allowBluetooth: with the Meta glasses (or any HFP headset) paired, that flag makes
-        // iOS route capture to the headset's mic, so speaking into the phone recorded silence —
-        // on a glasses app that is the normal state, not the edge case. Output still reaches a
-        // Bluetooth speaker via .allowBluetoothA2DP; only capture is pinned to the phone.
-        // Mode stays .default rather than .measurement so iOS keeps its input gain/noise
-        // processing, which dictation depends on.
-        try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.duckOthers, .allowBluetoothA2DP])
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
-        // .defaultToSpeaker used to be in the options above; it pins playback to the built-in
-        // speaker for the whole category, which overrides connected glasses or headphones. Force
-        // the loudspeaker only when there is genuinely nothing else, otherwise .playAndRecord
-        // plays out of the earpiece, which is too quiet to use.
-        if SimultaneousInterpreter.hasExternalOutput(session) {
-            try? session.overrideOutputAudioPort(.none)
-        } else {
-            try? session.overrideOutputAudioPort(.speaker)
+        // Through the shared hub rather than a private AVAudioEngine: iOS gives an app one input,
+        // and the hands-free assistant may already be holding it. Two engines meant whichever
+        // started second silently recorded nothing.
+        do {
+            listener = try AudioCaptureHub.shared.addListener(
+                locale: Self.activeLocale(),
+                onTranscript: { [weak self] text, isFinal in
+                    guard let self else { return }
+                    if !text.isEmpty {
+                        self.sawAnyResult = true
+                        self.transcript = text
+                    }
+                    if isFinal { self.finish(error: nil) }
+                },
+                onLevel: { [weak self] rms, _ in
+                    self?.peakLevel = max(self?.peakLevel ?? 0, rms)
+                })
+        } catch {
+            throw SpeechError.unavailable(language: Self.activeLocale().identifier)
         }
-        if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-            try? session.setPreferredInput(builtIn)
-        }
-        inputRouteName = session.currentRoute.inputs.first?.portName
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        // Prefer on-device dictation wherever the language pack allows it: it needs no round trip
-        // to Apple's speech servers, which is both faster and the difference between working and
-        // not on a network where those servers are slow or unreachable. `supportsOnDeviceRecognition`
-        // is false unless the assets are actually installed, so this never silently degrades.
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
-        self.request = request
-
-        let input = audioEngine.inputNode
-        // inputFormat, not outputFormat: the output format of the input node can come back with a
-        // zero sample rate before the route settles, and installTap raises on such a format.
-        let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
-            throw SpeechError.noInput(route: inputRouteName)
-        }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
-            guard let channel = buffer.floatChannelData?[0] else { return }
-            var peak: Float = 0
-            for i in 0..<Int(buffer.frameLength) {
-                peak = max(peak, abs(channel[i]))
-            }
-            Task { @MainActor in self?.peakLevel = max(self?.peakLevel ?? 0, peak) }
-        }
-        audioEngine.prepare()
-        try audioEngine.start()
+        inputRouteName = AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName
         isListening = true
-
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            if let result {
-                Task { @MainActor in
-                    self.sawAnyResult = true
-                    self.transcript = result.bestTranscription.formattedString
-                }
-            }
-            if let error {
-                Task { @MainActor in self.finish(error: error) }
-            } else if result?.isFinal == true {
-                Task { @MainActor in self.finish(error: nil) }
-            }
-        }
     }
 
     /// Stops listening and finalizes whatever was heard so far in `transcript`.
@@ -160,18 +88,13 @@ final class SpeechRecognizerOneShot: ObservableObject {
         finish(error: nil)
     }
 
-    /// Tears the session down and, when nothing was transcribed, explains which of the three
-    /// distinct failures happened instead of leaving an empty field.
+    /// Tears the session down and, when nothing was transcribed, explains which of the distinct
+    /// failures happened instead of leaving an empty field.
     private func finish(error: Error?) {
         guard isListening else { return }
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        task?.cancel()
-        request = nil
-        task = nil
+        AudioCaptureHub.shared.removeListener(listener)
+        listener = nil
         isListening = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
         if transcript.isEmpty {
             if peakLevel < 0.005 {
@@ -205,7 +128,6 @@ final class SpeechRecognizerOneShot: ObservableObject {
     enum SpeechError: LocalizedError {
         case notAuthorized
         case unavailable(language: String)
-        case noInput(route: String?)
 
         var errorDescription: String? {
             switch self {
@@ -214,8 +136,6 @@ final class SpeechRecognizerOneShot: ObservableObject {
             case .unavailable(let language):
                 return "Dictation isn't available for \(language) on this phone. "
                     + "Pick another language under Settings → Voice input."
-            case .noInput(let route):
-                return "No usable microphone input\(route.map { " (route: \($0))" } ?? "")."
             }
         }
     }

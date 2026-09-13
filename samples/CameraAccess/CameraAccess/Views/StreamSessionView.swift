@@ -9,14 +9,13 @@
 //
 // StreamSessionView.swift
 //
-// The app's front door: the chat, plus the glasses plumbing it draws on.
+// Владелец состояния очков и хозяин вкладок.
 //
-// Every engine answers directly from the phone now, so there is no call screen
-// and no server leg -- the LiveKit path that OpenAI/Gemini needed is gone.
-// Glasses are a camera, not a mode: AskAssistantView asks StreamSessionViewModel
-// for a single frame when the camera button is tapped. Pairing is reachable from
-// the chat's own menu rather than blocking the whole screen, so an unpaired pair
-// of glasses no longer stands between the user and a text question.
+// Отвечают теперь все движки прямо с телефона, поэтому экрана звонка нет, как нет серверного плеча
+// и LiveKit, которые были нужны OpenAI и Gemini. Очки здесь — камера, а не режим: экран чата и
+// ассистент просят у StreamSessionViewModel один кадр, когда он нужен. Привязка вызывается из шапки
+// чата, а не подменяет собой весь экран, — непривязанные очки больше не стоят между человеком и
+// обычным текстовым вопросом.
 //
 
 import MWDATCore
@@ -35,33 +34,42 @@ struct StreamSessionView: View {
     self._viewModel = StateObject(wrappedValue: StreamSessionViewModel(wearables: wearables))
   }
 
-  /// Paired and usable. "Automatic" resolves to the glasses only when this is true, which is what
-  /// makes the source indicator in the header honest rather than aspirational.
+  /// Привязаны и готовы. Именно от этого зависит «Автоматически», и именно это делает индикатор
+  /// источника в шапке честным, а не декоративным.
   private var glassesReady: Bool {
     guard let wearablesViewModel else { return false }
     return wearablesViewModel.registrationState == .registered || wearablesViewModel.hasMockDevice
   }
 
   var body: some View {
-    AskAssistantView(
+    RootTabView(
       streamViewModel: viewModel,
       glassesReady: glassesReady,
       onConnectGlasses: wearablesViewModel == nil ? nil : { showPairing = true }
     )
     .sheet(isPresented: $showPairing) {
       if let wearablesViewModel {
-        NavigationView {
+        NavigationStack {
           HomeScreenView(viewModel: wearablesViewModel)
             .toolbar {
-              ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Done") { showPairing = false }
+              ToolbarItem(placement: .topBarTrailing) {
+                Button("Готово") { showPairing = false }
               }
             }
         }
       }
     }
-    .alert("Error", isPresented: $viewModel.showError) {
-      Button("OK") { viewModel.dismissError() }
+    // Ассистент живёт вне экранов (он слушает и в фоне), но модель потока очков есть только здесь,
+    // поэтому камера передаётся ему замыканием, а не через обращение к SDK изнутри сервиса.
+    .task {
+      GlassesAssistant.shared.capturePhoto = { [weak viewModel] in
+        guard let viewModel else { return nil }
+        return await GlassesCamera.singleFrame(from: viewModel)
+      }
+      await GlassesAssistant.shared.refresh()
+    }
+    .alert("Ошибка", isPresented: $viewModel.showError) {
+      Button("ОК") { viewModel.dismissError() }
     } message: {
       Text(viewModel.errorMessage)
     }

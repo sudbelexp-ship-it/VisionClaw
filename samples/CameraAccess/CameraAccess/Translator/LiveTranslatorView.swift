@@ -2,16 +2,16 @@
 // The simultaneous-interpreter screen. The pipeline itself lives in SimultaneousInterpreter.swift;
 // this is the part you look at and touch.
 //
-// Why nothing here talks to a server
-// ----------------------------------
-// A round trip to GigaChat, YandexGPT or any other hosted model costs roughly 1-3 seconds per
-// chunk before the first word comes back, and this mode emits a chunk every couple of seconds --
-// the queue would fall behind the speaker within one sentence and never recover. A translator is
-// also most needed abroad, which is exactly where the network is worst. So all three stages run on
-// the device:
+// Where the work happens
+// ----------------------
+// Listening and speaking are always on the device; only the translation itself may leave it. The
+// two offline translators were tried first and neither was good enough, so a hosted model now does
+// the job whenever the network allows and Qwen3 takes over the moment it doesn't -- a translator is
+// most needed abroad, which is exactly where the signal is worst, so it can never simply stop.
 //
 //   speech -> text   SFSpeechRecognizer with requiresOnDeviceRecognition
-//   text -> text     Apple's Translation framework or Qwen3 through MLX (see TranslatorEngine)
+//   text -> text     GigaChat/YandexGPT when reachable, else Qwen3 through MLX, or Apple's
+//                    Translation framework -- see TranslatorEngine and CloudTranslator
 //   text -> speech   AVSpeechSynthesizer, rendered through the interpreter's own audio engine
 //
 // Requires iOS 18 for TranslationSession, which is why the deployment target moved up from 17.2.
@@ -31,22 +31,32 @@ import Translation
 /// chunk, but it is told what it has already said, so fragments join up into running speech. Both
 /// are fully offline; the trade is setup cost against quality, so the choice is the user's.
 enum TranslatorEngine: String, CaseIterable, Identifiable {
-    case apple
+    /// Hosted model when the network allows, Qwen3 the instant it doesn't. The default: it is the
+    /// only option that is both good enough in a cafe with Wi-Fi and still working on a mountain.
+    case hybrid
     case localLLM
+    case apple
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .apple: return "Apple Translate"
-        case .localLLM: return "Qwen3 (on-device)"
+        case .hybrid: return "Облако + запас офлайн"
+        case .localLLM: return "Только Qwen3 на устройстве"
+        case .apple: return "Переводчик Apple"
         }
     }
 
     var blurb: String {
         switch self {
-        case .apple: return "Built in, nothing to download. Fast and literal; weaker on fragments."
-        case .localLLM: return "Follows the thread across fragments. Needs a one-time download."
+        case .hybrid:
+            return "GigaChat или YandexGPT, пока есть сеть, и Qwen3 автоматически, когда её нет. "
+                + "Лучшее качество; расходует токены всё время разговора."
+        case .localLLM:
+            return "Не покидает телефон и ничего не стоит. Слабее на идиомах и порядке слов."
+        case .apple:
+            return "Встроен, качать нечего. Переводит по предложениям и буквально — с обрывками, "
+                + "которые даёт этот режим, справляется хуже всех."
         }
     }
 }
@@ -75,9 +85,8 @@ struct TranslatorLanguage: Identifiable, Hashable {
     ]
 }
 
-/// How far behind the speaker the interpreter runs. Named for what the user experiences rather
-/// than for the two numbers underneath, because "6 words or 2 seconds" is not a decision anyone
-/// wants to make in a conversation.
+/// How long a gap counts as the speaker finishing a thought. Named for what it feels like rather
+/// than for the number of seconds, because nobody wants to tune milliseconds mid-conversation.
 enum InterpreterPace: String, CaseIterable, Identifiable {
     case fastest
     case balanced
@@ -87,33 +96,26 @@ enum InterpreterPace: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .fastest: return "Fastest"
-        case .balanced: return "Balanced"
-        case .accurate: return "Most accurate"
+        case .fastest: return "Быстро"
+        case .balanced: return "Обычно"
+        case .accurate: return "Точно"
         }
     }
 
     var detail: String {
         switch self {
-        case .fastest: return "Starts talking after ~1s. Choppier, and reorders badly in German."
-        case .balanced: return "About 2 seconds behind. The default."
-        case .accurate: return "Waits ~3.5s for whole clauses. Best wording, most lag."
+        case .fastest: return "Режет по самой короткой паузе. Быстрее всех, но дробит медленную речь."
+        case .balanced: return "Режет там, где человек ставит запятую. По умолчанию."
+        case .accurate: return "Ждёт точку. Лучшие формулировки на длинных фразах."
         }
     }
 
-    var chunkWords: Int {
+    /// Seconds of silence that end a segment.
+    var pauseSeconds: Double {
         switch self {
-        case .fastest: return 4
-        case .balanced: return 6
-        case .accurate: return 10
-        }
-    }
-
-    var maxHold: TimeInterval {
-        switch self {
-        case .fastest: return 1.0
-        case .balanced: return 2.0
-        case .accurate: return 3.5
+        case .fastest: return 0.35
+        case .balanced: return 0.55
+        case .accurate: return 0.9
         }
     }
 }
@@ -121,14 +123,15 @@ enum InterpreterPace: String, CaseIterable, Identifiable {
 // MARK: - Screen
 
 struct LiveTranslatorView: View {
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var interpreter = SimultaneousInterpreter()
     @StateObject private var llm = LocalLLMTranslator.shared
+    @StateObject private var cloud = CloudTranslator.shared
+    @StateObject private var control = TranslatorControl.shared
 
     @AppStorage("translatorSource") private var sourceId = "en-US"
     @AppStorage("translatorTarget") private var targetId = "ru-RU"
     @AppStorage("translatorSpeaks") private var speakAloud = true
-    @AppStorage("translatorEngine") private var engineRaw = TranslatorEngine.apple.rawValue
+    @AppStorage("translatorEngine") private var engineRaw = TranslatorEngine.hybrid.rawValue
     @AppStorage("translatorPace") private var paceRaw = InterpreterPace.balanced.rawValue
 
     @State private var configuration: TranslationSession.Configuration?
@@ -146,7 +149,7 @@ struct LiveTranslatorView: View {
         TranslatorLanguage.targets.first { $0.id == targetId } ?? TranslatorLanguage.targets[0]
     }
     private var translationEngine: TranslatorEngine {
-        TranslatorEngine(rawValue: engineRaw) ?? .apple
+        TranslatorEngine(rawValue: engineRaw) ?? .hybrid
     }
     private var pace: InterpreterPace {
         InterpreterPace(rawValue: paceRaw) ?? .balanced
@@ -161,26 +164,22 @@ struct LiveTranslatorView: View {
                 controls
             }
             .background(Color.appBackground.ignoresSafeArea())
-            .navigationTitle("Live translator")
+            .navigationTitle("Переводчик")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") {
-                        interpreter.stop()
-                        persist(force: true)
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        // Clearing starts a separate recording rather than erasing the saved one:
-                        // what is already on disk is the record of a conversation that happened.
+                        // Очистка начинает новую запись, а не стирает сохранённую: то, что уже
+                        // на диске, — свидетельство состоявшегося разговора.
                         persist(force: true)
                         interpreter.clear()
                         sessionId = UUID()
                         persistedCount = 0
-                    } label: { Image(systemName: "trash") }
-                        .disabled(interpreter.chunks.isEmpty)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .disabled(interpreter.chunks.isEmpty)
+                    .accessibilityLabel("Очистить")
                 }
             }
             // SwiftUI vends the Apple translation session only through this modifier, so the whole
@@ -189,21 +188,26 @@ struct LiveTranslatorView: View {
                 do {
                     // Only Apple's path needs a language pack; preparing unconditionally asked a
                     // Qwen3 user to download one they will never use.
+                    // Only Apple's path needs a language pack; preparing unconditionally asked
+                    // everyone else to download one they will never use.
                     if translationEngine == .apple {
                         try await session.prepareTranslation()
                     }
                     for await id in interpreter.pending {
                         guard let chunk = interpreter.chunk(id) else { continue }
+                        let context = interpreter.chunks.compactMap(\.translated).suffix(3).map { $0 }
                         let text: String
                         switch translationEngine {
                         case .apple:
                             text = try await session.translate(chunk.original).targetText
                         case .localLLM:
                             text = try await llm.translate(
-                                chunk.original,
-                                from: source.name, to: target.name,
-                                recentContext: interpreter.chunks.compactMap(\.translated).suffix(3).map { $0 },
-                                isFragment: true)
+                                chunk.original, from: source.name, to: target.name,
+                                recentContext: context, isFragment: true)
+                        case .hybrid:
+                            text = try await cloud.translate(
+                                chunk.original, from: source.name, to: target.name,
+                                recentContext: context)
                         }
                         interpreter.complete(id, with: text, language: target.id, speak: speakAloud)
                         persist(force: false)
@@ -215,11 +219,21 @@ struct LiveTranslatorView: View {
             .sheet(isPresented: $showEngineSheet) { engineSheet }
             .task(id: "\(sourceId)-\(targetId)") { await refreshConfiguration() }
             .onChange(of: paceRaw) { _, _ in applyPace() }
+            // "включи переводчик" / "выключи переводчик", said without touching the phone.
+            .onChange(of: control.startTicket) { _, _ in
+                Task { if !interpreter.isRunning { await interpreter.start(source: source) } }
+            }
+            .onChange(of: control.stopTicket) { _, _ in
+                if interpreter.isRunning {
+                    interpreter.stop()
+                    persist(force: true)
+                }
+            }
             .onAppear { applyPace() }
             // Loading multi-GB weights takes tens of seconds. Doing it now, while the user is still
             // choosing languages, keeps it off the first chunk of a live conversation.
             .task(id: engineRaw) {
-                if translationEngine == .localLLM, llm.isDownloaded, !llm.isModelLoaded {
+                if translationEngine != .apple, llm.isDownloaded, !llm.isModelLoaded {
                     try? await llm.connect()
                 }
             }
@@ -245,8 +259,7 @@ struct LiveTranslatorView: View {
     }
 
     private func applyPace() {
-        interpreter.chunkWords = pace.chunkWords
-        interpreter.maxHold = pace.maxHold
+        interpreter.pauseSeconds = pace.pauseSeconds
     }
 
     // MARK: Language bar
@@ -254,11 +267,11 @@ struct LiveTranslatorView: View {
     private var languageBar: some View {
         HStack(spacing: 10) {
             Menu {
-                Picker("From", selection: $sourceId) {
+                Picker("С какого", selection: $sourceId) {
                     ForEach(TranslatorLanguage.sources) { Text($0.name).tag($0.id) }
                 }
             } label: {
-                languageChip(source.name, caption: "They speak")
+                languageChip(source.name, caption: "Собеседник")
             }
 
             Image(systemName: "arrow.right")
@@ -266,11 +279,11 @@ struct LiveTranslatorView: View {
                 .foregroundStyle(.tertiary)
 
             Menu {
-                Picker("To", selection: $targetId) {
+                Picker("На какой", selection: $targetId) {
                     ForEach(TranslatorLanguage.targets) { Text($0.name).tag($0.id) }
                 }
             } label: {
-                languageChip(target.name, caption: "You hear")
+                languageChip(target.name, caption: "Вы слышите")
             }
         }
         .padding(.horizontal, 14)
@@ -345,15 +358,15 @@ struct LiveTranslatorView: View {
             Image(systemName: "waveform.and.person.filled")
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("Point the phone at whoever is talking")
+            Text("Направьте телефон на говорящего")
                 .font(.headline)
-            Text("Translation starts a couple of seconds in and keeps going while they talk — you "
-                 + "don't wait for them to finish. Everything runs on this phone, with no network.")
+            Text("Перевод начинается через пару секунд после начала фразы и идёт, пока человек "
+                 + "говорит, — ждать окончания не нужно.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 28)
-            Label("Wear the glasses or earphones — otherwise the phone hears its own voice",
+            Label("Наденьте очки или наушники — иначе телефон услышит собственный голос",
                   systemImage: "ear.badge.waveform")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -368,7 +381,7 @@ struct LiveTranslatorView: View {
 
     private var controls: some View {
         VStack(spacing: 12) {
-            Picker("Pace", selection: $paceRaw) {
+            Picker("Темп", selection: $paceRaw) {
                 ForEach(InterpreterPace.allCases) { Text($0.label).tag($0.rawValue) }
             }
             .pickerStyle(.segmented)
@@ -386,7 +399,7 @@ struct LiveTranslatorView: View {
                     Image(systemName: translationEngine == .apple ? "apple.logo" : "cpu")
                     Text(translationEngine.label)
                     if translationEngine == .localLLM && !llm.isDownloaded {
-                        Text("— not downloaded").foregroundStyle(.orange)
+                        Text("— не скачана").foregroundStyle(.orange)
                     } else if translationEngine == .localLLM && llm.isLoadingModel {
                         ProgressView().controlSize(.mini)
                     }
@@ -399,7 +412,7 @@ struct LiveTranslatorView: View {
             .buttonStyle(.plain)
 
             Toggle(isOn: $speakAloud) {
-                Label("Speak into my ear", systemImage: "ear")
+                Label("Читать вслух", systemImage: "ear")
                     .font(.subheadline)
             }
 
@@ -413,7 +426,7 @@ struct LiveTranslatorView: View {
                     if !interpreter.isRunning { persist(force: true) }
                 }
             } label: {
-                Label(interpreter.isRunning ? "Stop" : "Start interpreting",
+                Label(interpreter.isRunning ? "Стоп" : "Начать перевод",
                       systemImage: interpreter.isRunning ? "stop.fill" : "mic.fill")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
@@ -452,10 +465,40 @@ struct LiveTranslatorView: View {
                         }
                     }
                 } header: {
-                    Text("Translator")
+                    Text("Чем переводить")
                 }
 
-                if translationEngine == .localLLM {
+                if translationEngine == .hybrid {
+                    Section {
+                        Picker("Сервис", selection: Binding(get: { cloud.service },
+                                                             set: { cloud.service = $0 })) {
+                            ForEach(CloudTranslator.Service.allCases) { option in
+                                Text(option.label).tag(option)
+                            }
+                        }
+                        if !cloud.service.isConfigured {
+                            Label("Ключ не задан — переводить будет Qwen3",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        if let reason = cloud.lastFallbackReason {
+                            // Silent fallback is the right behaviour mid-conversation, but the user
+                            // still deserves to find out why the quality changed.
+                            Label("Последний откат: \(reason)", systemImage: "arrow.uturn.down")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Облачный сервис")
+                    } footer: {
+                        Text("Ключи — в Настройках, раздел «Модель». Выбранный сервис переводит, "
+                             + "пока доступен; любой сбой молча переключает на модель ниже, не "
+                             + "прерывая разговор.")
+                    }
+                }
+
+                if translationEngine != .apple {
                     Section {
                         ForEach(TranslatorModelTier.allCases) { tier in
                             Button {
@@ -473,16 +516,16 @@ struct LiveTranslatorView: View {
                         }
 
                         if llm.isDownloaded {
-                            Label("Downloaded", systemImage: "checkmark.circle.fill")
+                            Label("Скачана", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
-                            Button("Delete from this phone", role: .destructive) {
+                            Button("Удалить с телефона", role: .destructive) {
                                 Task { _ = await llm.deleteDownloadedModel() }
                             }
                         } else if isDownloadingModel {
                             VStack(alignment: .leading, spacing: 6) {
                                 ProgressView(value: llm.downloadProgress)
                                 Text(llm.isFinalizing
-                                     ? "Unpacking…"
+                                     ? "Распаковываю…"
                                      : "Downloading \(Int(llm.downloadProgress * 100))%")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
@@ -495,42 +538,40 @@ struct LiveTranslatorView: View {
                                     isDownloadingModel = false
                                 }
                             } label: {
-                                Label("Download \(llm.tier.sizeText)", systemImage: "arrow.down.circle")
+                                Label("Скачать \(llm.tier.sizeText)", systemImage: "arrow.down.circle")
                             }
                         }
                     } header: {
-                        Text("On-device model")
+                        Text(translationEngine == .hybrid ? "Offline fallback model" : "On-device model")
                     } footer: {
-                        Text("Downloads once over Wi-Fi, then works with no network at all. The "
-                             + "larger model translates better; the smaller one answers sooner, "
-                             + "which matters more here than in a chat.")
+                        Text(translationEngine == .hybrid
+                             ? "Используется, когда облако недоступно. Без неё потеря сети означает "
+                               + "потерю перевода целиком."
+                             : "Скачивается один раз по Wi-Fi, дальше работает без сети вообще. "
+                               + "Модель побольше переводит лучше, поменьше — отвечает быстрее.")
                     }
                 }
 
                 Section {
                     HStack {
-                        Label("Playing to", systemImage: "speaker.wave.2")
+                        Label("Звук идёт в", systemImage: "speaker.wave.2")
                         Spacer()
                         Text(interpreter.outputRouteName.isEmpty ? "—" : interpreter.outputRouteName)
                             .foregroundStyle(.secondary)
                     }
                     .font(.subheadline)
-                    if interpreter.echoCancellationActive {
-                        Label("Echo cancellation on", systemImage: "checkmark.circle")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
                 } footer: {
-                    Text("With the glasses or earphones connected the translation goes there and "
-                         + "keeps full audio quality. On the phone's own speaker it would be picked "
-                         + "back up by the microphone, so echo cancellation switches on instead.")
+                    Text("Слушает всегда микрофон телефона — направьте его на говорящего. Звук "
+                         + "идёт в очки или наушники в полном качестве, когда они подключены. На "
+                         + "динамике телефона микрофон услышит часть перевода обратно, поэтому "
+                         + "гарнитуру лучше надеть.")
                 }
             }
-            .navigationTitle("Translation engine")
+            .navigationTitle("Движок перевода")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showEngineSheet = false }
+                    Button("Готово") { showEngineSheet = false }
                 }
             }
         }

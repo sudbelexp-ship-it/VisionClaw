@@ -3,7 +3,21 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<string>ru</string>
+	<!--
+	  Объявляем приложение русскоязычным.
+
+	  Это не косметика. Locale.current возвращает локаль, до которой разрешилось ПРИЛОЖЕНИЕ, и она
+	  ограничена языками, которые приложение о себе заявляет. Пока здесь был только английский,
+	  на русском телефоне Locale.current давал en-US — и распознавание речи послушно слушало
+	  по-английски, записывая русские слова как английские. Интерфейс теперь русский, и система
+	  об этом знает.
+	-->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>ru</string>
+		<string>en</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>VisionClaw</string>
 	<key>CFBundleExecutable</key>
@@ -69,32 +83,32 @@
 		<string>external-accessory</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Needed to connect to Meta AI Glasses</string>
+	<string>Нужен для подключения к очкам Meta.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>This allows your phone to find and connect to your glasses over Wi-Fi, which carries far more video than Bluetooth.</string>
+	<string>Позволяет телефону найти очки по Wi-Fi — по нему видео идёт заметно лучше, чем по Bluetooth.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_bonjour._tcp</string>
 	</array>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>To listen to audio from Meta AI Glasses</string>
+	<string>Нужен для звука с очков Meta.</string>
 	<key>UISupportedExternalAccessoryProtocols</key>
 	<array>
 		<string>com.meta.ar.wearable</string>
 	</array>
 	<!-- End required section for Device Access Toolkit Apps -->
 	<key>NSCameraUsageDescription</key>
-	<string>This app uses the camera for iPhone testing mode, allowing you to test the AI assistant pipeline without glasses.</string>
+	<string>Камера телефона снимает кадр, когда очки не подключены или выбраны вручную.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>This app uses the microphone to have voice conversations with the AI assistant while streaming from your glasses.</string>
+	<string>Микрофон нужен для голосовых вопросов, синхронного перевода и фразы-триггера.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>This app converts your spoken question to text when using the GigaChat, YandexGPT, or on-device Ask screen.</string>
+	<string>Распознавание речи превращает сказанное в текст: вопросы, команды и перевод собеседника.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>This app needs access to save photos captured from your glasses.</string>
+	<string>Нужно, чтобы сохранять снимки с очков в вашу фотоплёнку.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>This app reads and adds calendar events so the assistant can answer questions about your schedule and create events when you ask.</string>
+	<string>Доступ к календарю, чтобы ассистент отвечал про расписание и создавал события по просьбе.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>This app creates reminders when you ask the assistant to remind you about something.</string>
+	<string>Доступ к напоминаниям, чтобы ассистент создавал их по вашей просьбе.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

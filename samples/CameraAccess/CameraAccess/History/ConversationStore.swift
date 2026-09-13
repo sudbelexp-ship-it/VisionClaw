@@ -43,7 +43,7 @@ struct StoredMessage: Codable, Identifiable, Equatable {
 }
 
 struct StoredSession: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable { case chat, interpreter }
+    enum Kind: String, Codable { case chat, interpreter, live }
 
     let id: UUID
     var kind: Kind
@@ -57,7 +57,13 @@ struct StoredSession: Codable, Identifiable, Equatable {
     /// opening message is edited or the session is reopened.
     var title: String {
         let firstText = messages.first { !$0.text.isEmpty }?.text ?? ""
-        if firstText.isEmpty { return kind == .chat ? "Photo" : "Conversation" }
+        if firstText.isEmpty {
+            switch kind {
+            case .chat: return "Фото"
+            case .interpreter: return "Разговор"
+            case .live: return "Эфир"
+            }
+        }
         return String(firstText.prefix(80))
     }
 }

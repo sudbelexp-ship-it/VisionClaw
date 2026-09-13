@@ -51,6 +51,20 @@
 		C4E81A730B9D26F5A1073FEC /* LiveTranslatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */; };
 		F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */; };
 		6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */; };
+		9C471E28A5D06F3B71E8940A /* GlassesCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */; };
+		2F84A07C6B19D35E80C47A2D /* GlassesAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0E5D3B92F17C48A5E20B61 /* GlassesAssistant.swift */; };
+		8E3A17C05D2B649F3A18C07E /* AudioCaptureHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B9D4E128A7F03C6D142E9B8 /* AudioCaptureHub.swift */; };
+		6E290C75D8B31A40F96C25E8 /* LiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B71FE2035CD79A1B6034E9 /* LiveView.swift */; };
+		17C4E2B8360DA5F94E17B602 /* LiveSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C93A05E7412FD86B075EA31C /* LiveSession.swift */; };
+		B05C723EA9146F8D30C5E217 /* LiveFrameBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F81D6039C4EB27A61D0834F /* LiveFrameBuffer.swift */; };
+		72B4E8C931F5A06D4E28B930 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9D3061F47E852BC30716DA4 /* RootTabView.swift */; };
+		D83F5A16E02B47C95138AE60 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C70E94B58DA236F0E41B7C8 /* Theme.swift */; };
+		95C08D461EA372B50F49C8D3 /* TranslatorControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B74A9E03568C1FD74E0932A /* TranslatorControl.swift */; };
+		4F82E0A73C591BD6082AF41E /* WeatherService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E607B354D9182FA4C3705B6D /* WeatherService.swift */; };
+		A503C8E1742BD69F0E85137C /* HotCommandsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */; };
+		C1E47B203F86A95D7204E8B1 /* HotCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F9A6D5C82E147B9503D6AF /* HotCommands.swift */; };
+		7E05C9A4318DF26B540A1E93 /* ChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */; };
+		1A6F30D85E27B94C0A3D7E15 /* CloudTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C82B71F0D935EA6182C4F0B /* CloudTranslator.swift */; };
 		5A1D8E62B037F4C9A2E61D08 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E430A75C6182BD40F7A3E61 /* HistoryView.swift */; };
 		3F7A2C18D460B9E5714CA09B /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */; };
 		A31C7E5048B2F09D6C41DA77 /* GigaChatDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7409D22E5163CA84F80B215 /* GigaChatDiagnostics.swift */; };
@@ -132,6 +146,20 @@
 		D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslatorView.swift; sourceTree = "<group>"; };
 		8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMTranslator.swift; sourceTree = "<group>"; };
 		A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimultaneousInterpreter.swift; sourceTree = "<group>"; };
+		0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesCamera.swift; sourceTree = "<group>"; };
+		6A0E5D3B92F17C48A5E20B61 /* GlassesAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesAssistant.swift; sourceTree = "<group>"; };
+		5B9D4E128A7F03C6D142E9B8 /* AudioCaptureHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureHub.swift; sourceTree = "<group>"; };
+		84B71FE2035CD79A1B6034E9 /* LiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveView.swift; sourceTree = "<group>"; };
+		C93A05E7412FD86B075EA31C /* LiveSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSession.swift; sourceTree = "<group>"; };
+		5F81D6039C4EB27A61D0834F /* LiveFrameBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveFrameBuffer.swift; sourceTree = "<group>"; };
+		A9D3061F47E852BC30716DA4 /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		1C70E94B58DA236F0E41B7C8 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		2B74A9E03568C1FD74E0932A /* TranslatorControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslatorControl.swift; sourceTree = "<group>"; };
+		E607B354D9182FA4C3705B6D /* WeatherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherService.swift; sourceTree = "<group>"; };
+		7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCommandsView.swift; sourceTree = "<group>"; };
+		30F9A6D5C82E147B9503D6AF /* HotCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCommands.swift; sourceTree = "<group>"; };
+		B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSession.swift; sourceTree = "<group>"; };
+		4C82B71F0D935EA6182C4F0B /* CloudTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTranslator.swift; sourceTree = "<group>"; };
 		9E430A75C6182BD40F7A3E61 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		C82E5B0F31A9647D8E05B2F7 /* ConversationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStore.swift; sourceTree = "<group>"; };
 		B7409D22E5163CA84F80B215 /* GigaChatDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaChatDiagnostics.swift; sourceTree = "<group>"; };
@@ -241,6 +269,9 @@
 				CEEFD295486ECBDD4BE9D057 /* YandexGPT */,
 				3104366488BA8FAC1039BA51 /* LocalMLX */,
 				E71F4A8C2D6B35904A1CE8B7 /* Translator */,
+				3E6D91A470B58CF214E0D73B /* Live */,
+				F41B87D05C296EA3708D1B45 /* UI */,
+				D74E1B60C8A2F53914E7B0D6 /* Assistant */,
 				B60C9F3A248E17D5CA903B42 /* History */,
 				50B9E8D4F6E58DCD2AABC59C /* Ask */,
 				8FD96B702E6F0A9800F56AB1 /* ViewModels */,
@@ -298,6 +329,7 @@
 		50B9E8D4F6E58DCD2AABC59C /* Ask */ = {
 			isa = PBXGroup;
 			children = (
+				B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */,
 				B1F71EB69113BA510C3D0DBF /* DirectAIBackend.swift */,
 				ED08FA9DB3B63F4B27F5F65F /* SpeechRecognizerOneShot.swift */,
 				FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */,
@@ -355,12 +387,46 @@
 			path = History;
 			sourceTree = "<group>";
 		};
+		D74E1B60C8A2F53914E7B0D6 /* Assistant */ = {
+			isa = PBXGroup;
+			children = (
+				6A0E5D3B92F17C48A5E20B61 /* GlassesAssistant.swift */,
+				5B9D4E128A7F03C6D142E9B8 /* AudioCaptureHub.swift */,
+				2B74A9E03568C1FD74E0932A /* TranslatorControl.swift */,
+				E607B354D9182FA4C3705B6D /* WeatherService.swift */,
+				7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */,
+				30F9A6D5C82E147B9503D6AF /* HotCommands.swift */,
+				0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */,
+			);
+			path = Assistant;
+			sourceTree = "<group>";
+		};
+		F41B87D05C296EA3708D1B45 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				1C70E94B58DA236F0E41B7C8 /* Theme.swift */,
+				A9D3061F47E852BC30716DA4 /* RootTabView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		3E6D91A470B58CF214E0D73B /* Live */ = {
+			isa = PBXGroup;
+			children = (
+				5F81D6039C4EB27A61D0834F /* LiveFrameBuffer.swift */,
+				C93A05E7412FD86B075EA31C /* LiveSession.swift */,
+				84B71FE2035CD79A1B6034E9 /* LiveView.swift */,
+			);
+			path = Live;
+			sourceTree = "<group>";
+		};
 		E71F4A8C2D6B35904A1CE8B7 /* Translator */ = {
 			isa = PBXGroup;
 			children = (
 				D0B37C915E2A48F1C6740A29 /* LiveTranslatorView.swift */,
 				8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */,
 				A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */,
+				4C82B71F0D935EA6182C4F0B /* CloudTranslator.swift */,
 			);
 			path = Translator;
 			sourceTree = "<group>";
@@ -514,6 +580,20 @@
 				C4E81A730B9D26F5A1073FEC /* LiveTranslatorView.swift in Sources */,
 				F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */,
 				6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */,
+				9C471E28A5D06F3B71E8940A /* GlassesCamera.swift in Sources */,
+				2F84A07C6B19D35E80C47A2D /* GlassesAssistant.swift in Sources */,
+				8E3A17C05D2B649F3A18C07E /* AudioCaptureHub.swift in Sources */,
+				6E290C75D8B31A40F96C25E8 /* LiveView.swift in Sources */,
+				17C4E2B8360DA5F94E17B602 /* LiveSession.swift in Sources */,
+				B05C723EA9146F8D30C5E217 /* LiveFrameBuffer.swift in Sources */,
+				72B4E8C931F5A06D4E28B930 /* RootTabView.swift in Sources */,
+				D83F5A16E02B47C95138AE60 /* Theme.swift in Sources */,
+				95C08D461EA372B50F49C8D3 /* TranslatorControl.swift in Sources */,
+				4F82E0A73C591BD6082AF41E /* WeatherService.swift in Sources */,
+				A503C8E1742BD69F0E85137C /* HotCommandsView.swift in Sources */,
+				C1E47B203F86A95D7204E8B1 /* HotCommands.swift in Sources */,
+				7E05C9A4318DF26B540A1E93 /* ChatSession.swift in Sources */,
+				1A6F30D85E27B94C0A3D7E15 /* CloudTranslator.swift in Sources */,
 				5A1D8E62B037F4C9A2E61D08 /* HistoryView.swift in Sources */,
 				3F7A2C18D460B9E5714CA09B /* ConversationStore.swift in Sources */,
 				A31C7E5048B2F09D6C41DA77 /* GigaChatDiagnostics.swift in Sources */,

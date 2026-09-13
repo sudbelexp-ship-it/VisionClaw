@@ -1,142 +1,243 @@
+// VisionClaw - SettingsView.swift
+// Настройки одним списком с иконками, как в системных.
+//
+// Раньше это была плоская форма из одинаковых серых строк, где ключ GigaChat лежал рядом с выбором
+// языка диктовки и настройкой памяти. Разделено на то, о чём человек думает отдельно: чем отвечать,
+// что приложение слышит, что помнит, чем снимает.
+
 import Speech
 import SwiftUI
 
 struct SettingsView: View {
-  @Environment(\.dismiss) private var dismiss
-  private let settings = SettingsManager.shared
+    private let settings = SettingsManager.shared
 
-  @State private var showResetConfirmation = false
-  // Applies immediately rather than on Save: the root view observes the same
-  // key and swaps the capture pipeline live.
-  @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.automatic.rawValue
-  @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
-  @AppStorage(SettingsManager.speechLocaleKey) private var speechLocaleRaw = ""
-  @AppStorage(SettingsManager.memoryTurnsKey) private var memoryTurns = 6
+    @State private var showResetConfirmation = false
+    @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.automatic.rawValue
+    @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
+    @AppStorage(SettingsManager.speechLocaleKey) private var speechLocaleRaw = ""
+    @AppStorage(SettingsManager.memoryTurnsKey) private var memoryTurns = 6
+    @AppStorage(GlassesAssistant.enabledKey) private var assistantEnabled = false
+    @AppStorage(GlassesAssistant.phraseKey) private var assistantPhrase = GlassesAssistant.defaultPhrase
+    @StateObject private var assistant = GlassesAssistant.shared
+    @StateObject private var hub = AudioCaptureHub.shared
 
-  private var cameraFooter: String {
-    switch CaptureSource(rawValue: captureSourceRaw) ?? .automatic {
-    case .automatic: return "Your glasses when they're paired and awake, this phone otherwise. The chat header always shows which one is live."
-    case .glasses: return "Always your Meta glasses. Pair them from the menu in the chat header."
-    case .iPhoneCamera: return "Always this phone's camera, even with glasses connected."
+    private var engine: IntelligenceEngine {
+        IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat
     }
-  }
 
-  /// Languages this phone can actually dictate in, alphabetical. Taken from the Speech framework
-  /// rather than hardcoded, so a language pack the user installs later simply shows up.
-  private static let dictationLocales: [Locale] = {
-    SFSpeechRecognizer.supportedLocales()
-      .sorted { displayName(for: $0) < displayName(for: $1) }
-  }()
-
-  private static func displayName(for locale: Locale) -> String {
-    Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
-  }
-
-  /// What "Follow phone" resolves to right now. Worth spelling out: it is the phone's own language
-  /// setting, NOT the language this app's interface happens to be in.
-  private var systemSpeechLanguageName: String {
-    let identifier = Locale.preferredLanguages.first ?? Locale.current.identifier
-    return Self.displayName(for: Locale(identifier: identifier))
-  }
-
-  private var speechFooter: String {
-    "Language the mic button on the Ask screen listens for. The app's interface is English, so "
-      + "leaving this to the app alone made it listen in English on a Russian phone."
-  }
-
-  private var intelligenceFooter: String {
-    switch IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat {
-    case .gigachat: return "Sber's GigaChat, answered straight from this phone. Configure the key under GigaChat below."
-    case .yandexgpt: return "Yandex Cloud's YandexGPT, answered straight from this phone. Configure the key under YandexGPT below."
-    case .localMLX: return "Runs fully on-device via Apple MLX — no account, no network. Download the model under Local Model below first."
+    var body: some View {
+        NavigationStack {
+            List {
+                modelSection
+                assistantSection
+                voiceSection
+                cameraSection
+                memorySection
+                dataSection
+            }
+            .navigationTitle("Настройки")
+            .onChange(of: assistantEnabled) { _, _ in Task { await assistant.refresh() } }
+            .onChange(of: assistantPhrase) { _, _ in Task { await assistant.refresh() } }
+            .alert("Сбросить настройки?", isPresented: $showResetConfirmation) {
+                Button("Сбросить", role: .destructive) { settings.resetAll() }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Все параметры вернутся к значениям по умолчанию. История и скачанные модели останутся.")
+            }
+        }
     }
-  }
 
-  var body: some View {
-    NavigationView {
-      Form {
-        Section(header: Text("Camera"), footer: Text(cameraFooter)) {
-          Picker("Source", selection: $captureSourceRaw) {
-            ForEach(CaptureSource.allCases, id: \.rawValue) { source in
-              Text(source.label).tag(source.rawValue)
-            }
-          }
-          .pickerStyle(.segmented)
-        }
+    // MARK: Модель
 
-        Section(header: Text("Intelligence"), footer: Text(intelligenceFooter)) {
-          Picker("Model", selection: $intelligenceRaw) {
-            ForEach(IntelligenceEngine.allCases, id: \.rawValue) { engine in
-              Text(engine.label).tag(engine.rawValue)
-            }
-          }
-          .pickerStyle(.menu)
-        }
-
+    private var modelSection: some View {
         Section {
-          Picker("Remember", selection: $memoryTurns) {
-            Text("Off").tag(0)
-            Text("Last 4 messages").tag(4)
-            Text("Last 6 messages").tag(6)
-            Text("Last 10 messages").tag(10)
-          }
-          .pickerStyle(.menu)
+            Picker(selection: $intelligenceRaw) {
+                ForEach(IntelligenceEngine.allCases, id: \.rawValue) { option in
+                    Text(option.label).tag(option.rawValue)
+                }
+            } label: {
+                SettingsRow(icon: "sparkles", tint: .brand, title: "Отвечает")
+            }
+
+            NavigationLink {
+                GigaChatSettingsView()
+            } label: {
+                SettingsRow(icon: "key.fill", tint: .green, title: "GigaChat",
+                            subtitle: settings.gigaChatAuthKey.isEmpty ? "Ключ не задан" : "Настроен")
+            }
+            NavigationLink {
+                YandexGPTSettingsView()
+            } label: {
+                SettingsRow(icon: "key.fill", tint: .red, title: "YandexGPT",
+                            subtitle: settings.yandexGPTApiKey.isEmpty ? "Ключ не задан" : "Настроен")
+            }
+            NavigationLink {
+                LocalMLXSettingsView()
+            } label: {
+                SettingsRow(icon: "cpu", tint: .indigo, title: "Локальная модель",
+                            subtitle: "FastVLM — работает без сети")
+            }
         } header: {
-          Text("Conversation memory")
+            Text("Модель")
         } footer: {
-          Text("GigaChat and YandexGPT keep nothing between requests, so whatever you pick here is "
-               + "re-sent — and re-billed — with every single question. More memory means better "
-               + "follow-ups and a higher cost per question. The on-device model is free either way. "
-               + "Switching models always starts a fresh chat.")
+            Text(engineFooter)
         }
-
-        Section(header: Text("Voice input"), footer: Text(speechFooter)) {
-          Picker("Language", selection: $speechLocaleRaw) {
-            Text("Follow phone (\(systemSpeechLanguageName))").tag("")
-            ForEach(Self.dictationLocales, id: \.identifier) { locale in
-              Text(Self.displayName(for: locale)).tag(locale.identifier)
-            }
-          }
-          .pickerStyle(.menu)
-        }
-
-        Section {
-          NavigationLink("GigaChat") {
-            GigaChatSettingsView()
-          }
-          NavigationLink("YandexGPT") {
-            YandexGPTSettingsView()
-          }
-          NavigationLink("Local Model (FastVLM)") {
-            LocalMLXSettingsView()
-          }
-        } footer: {
-          Text("Keys and model download for the three backends that run straight from this phone. Pick which one answers under Intelligence above.")
-        }
-
-        Section {
-          Button("Reset to Defaults") {
-            showResetConfirmation = true
-          }
-          .foregroundColor(.red)
-        }
-      }
-      .navigationTitle("Settings")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .navigationBarTrailing) {
-          Button("Done") { dismiss() }
-            .fontWeight(.semibold)
-        }
-      }
-      .alert("Reset Settings", isPresented: $showResetConfirmation) {
-        Button("Reset", role: .destructive) {
-          settings.resetAll()
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text("This will reset all settings to the values built into the app.")
-      }
     }
-  }
+
+    private var engineFooter: String {
+        switch engine {
+        case .gigachat: return "GigaChat от Сбера, запрос уходит прямо с телефона."
+        case .yandexgpt: return "YandexGPT от Яндекс Облака, запрос уходит прямо с телефона."
+        case .localMLX: return "Работает целиком на устройстве: без аккаунта, без сети, бесплатно."
+        }
+    }
+
+    // MARK: Ассистент
+
+    private var assistantSection: some View {
+        Section {
+            Toggle(isOn: $assistantEnabled) {
+                SettingsRow(icon: "waveform", tint: .orange, title: "Слушать фразу",
+                            subtitle: assistantEnabled ? "Работает и в фоне" : "Выключено")
+            }
+            if assistantEnabled {
+                LabeledContent("Фраза") {
+                    TextField(GlassesAssistant.defaultPhrase, text: $assistantPhrase)
+                        .multilineTextAlignment(.trailing)
+                        .autocapitalization(.none)
+                        .autocorrectionDisabled()
+                }
+                NavigationLink {
+                    HotCommandsView()
+                } label: {
+                    SettingsRow(icon: "bolt.fill", tint: .yellow, title: "Горячие фразы",
+                                subtitle: "Команды без обращения")
+                }
+                if hub.isSuspended {
+                    StatusLine(kind: .idle, text: "Пауза — играет звук в другом приложении")
+                } else if let status = assistant.status {
+                    StatusLine(kind: .good, text: status)
+                }
+                if let error = assistant.lastError {
+                    StatusLine(kind: .warning, text: error)
+                }
+            }
+        } header: {
+            Text("Голосовой ассистент")
+        } footer: {
+            Text(assistantEnabled
+                 ? "Скажите фразу и вопрос — «\(assistantPhrase), что ты видишь». Снимок делается "
+                   + "автоматически, ответ читается вслух. Пока играет музыка или идёт звонок, "
+                   + "микрофон отдаётся системе: это сохраняет качество звука и не даёт словам песни "
+                   + "срабатывать как команды, но и услышать вас в это время приложение не может."
+                 : "Спрашивать очки голосом, не доставая телефон.")
+        }
+    }
+
+    // MARK: Голос
+
+    private var voiceSection: some View {
+        Section {
+            Picker(selection: $speechLocaleRaw) {
+                Text("Как на телефоне (\(systemSpeechLanguageName))").tag("")
+                ForEach(Self.dictationLocales, id: \.identifier) { locale in
+                    Text(Self.displayName(for: locale)).tag(locale.identifier)
+                }
+            } label: {
+                SettingsRow(icon: "mic.fill", tint: .blue, title: "Язык распознавания")
+            }
+        } header: {
+            Text("Голос")
+        } footer: {
+            Text("Язык, который слушает микрофон в чате и в голосовых командах.")
+        }
+    }
+
+    // MARK: Камера
+
+    private var cameraSection: some View {
+        Section {
+            Picker(selection: $captureSourceRaw) {
+                ForEach(CaptureSource.allCases, id: \.rawValue) { source in
+                    Label(source.label, systemImage: source.symbol).tag(source.rawValue)
+                }
+            } label: {
+                SettingsRow(icon: "camera.fill", tint: .teal, title: "Источник")
+            }
+        } header: {
+            Text("Камера")
+        } footer: {
+            Text(cameraFooter)
+        }
+    }
+
+    private var cameraFooter: String {
+        switch CaptureSource(rawValue: captureSourceRaw) ?? .automatic {
+        case .automatic:
+            return "Очки, когда подключены, иначе телефон. Активный источник всегда виден в шапке чата."
+        case .glasses:
+            return "Всегда очки. Подключить их можно из шапки чата."
+        case .iPhoneCamera:
+            return "Всегда камера телефона, даже с подключёнными очками."
+        }
+    }
+
+    // MARK: Память
+
+    private var memorySection: some View {
+        Section {
+            Picker(selection: $memoryTurns) {
+                Text("Выключена").tag(0)
+                Text("4 сообщения").tag(4)
+                Text("6 сообщений").tag(6)
+                Text("10 сообщений").tag(10)
+            } label: {
+                SettingsRow(icon: "brain", tint: .purple, title: "Помнить диалог")
+            }
+        } header: {
+            Text("Память")
+        } footer: {
+            // Стоит сказать прямо: это повторяющаяся, а не разовая цена.
+            Text("GigaChat и YandexGPT ничего не хранят между запросами, поэтому выбранное окно "
+                 + "уходит на сервер заново с каждым вопросом и оплачивается каждый раз. Локальная "
+                 + "модель бесплатна в любом случае. При смене модели чат начинается заново.")
+        }
+    }
+
+    // MARK: Данные
+
+    private var dataSection: some View {
+        Section {
+            NavigationLink {
+                HistorySettingsView()
+            } label: {
+                SettingsRow(icon: "externaldrive.fill", tint: .gray, title: "Хранение истории",
+                            subtitle: "Срок и размер")
+            }
+            Button(role: .destructive) {
+                showResetConfirmation = true
+            } label: {
+                SettingsRow(icon: "arrow.counterclockwise", tint: .pink, title: "Сбросить настройки")
+            }
+        } header: {
+            Text("Данные")
+        }
+    }
+
+    // MARK: Языки диктовки
+
+    /// Языки, на которых этот телефон действительно умеет распознавать речь. Берутся из системы, а
+    /// не из списка в коде, поэтому языковой пакет, установленный позже, просто появится здесь.
+    private static let dictationLocales: [Locale] = {
+        SFSpeechRecognizer.supportedLocales().sorted { displayName(for: $0) < displayName(for: $1) }
+    }()
+
+    private static func displayName(for locale: Locale) -> String {
+        Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+    }
+
+    private var systemSpeechLanguageName: String {
+        let identifier = Locale.preferredLanguages.first ?? Locale.current.identifier
+        return Self.displayName(for: Locale(identifier: identifier))
+    }
 }

@@ -4,14 +4,14 @@
 //
 // The three problems that separates from phrase-by-phrase translation, and how each is solved:
 //
-// 1. WHEN TO COMMIT TEXT THAT ISN'T FINISHED.
-//    A streaming recogniser constantly revises its guess: "I want to buy" can become "I want to
-//    bike". Translating every revision would babble. The fix is local agreement: keep the last two
-//    hypotheses and treat their common word prefix as settled, because a word that survived one
-//    revision almost never changes again. Everything past what we already sent, once it is both
-//    settled and long enough to be worth a sentence of its own, goes out. This is the standard
-//    trick from streaming-ASR research (LocalAgreement-2) and it is what buys a 2-3 second
-//    ear-voice span instead of a whole-sentence one.
+// 1. WHERE TO CUT THE STREAM.
+//    Cutting every N words, which is what this did first, slices sentences in the middle of a
+//    thought, and no translator recovers from half a clause. But speakers already mark their own
+//    boundaries: they pause. So the cut is driven by silence in the microphone signal rather than
+//    by the text -- the recogniser gives no timing at all, so loudness is measured directly off
+//    the audio buffers, against a noise floor that tracks the room. Text accumulates freely and
+//    goes out the moment the speaker draws breath, which is also the instant the next words are
+//    still to come, so nothing is lost by leaving.
 //
 // 2. TRANSLATING FRAGMENTS.
 //    Chunks now start and end mid-sentence, which a sentence-level translator handles badly. The
@@ -45,7 +45,8 @@ final class InterpreterVoice {
     private var outputFormat: AVAudioFormat?
     private var usesEngine = false
 
-    /// Attach to a running engine. Call before the engine starts.
+    /// Attach to the shared engine. Safe whether or not it is already running: the node is
+    /// connected with the mixer's own format, so no reconfiguration is needed.
     func attach(to engine: AVAudioEngine) {
         let format = engine.mainMixerNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return }
@@ -131,32 +132,32 @@ final class SimultaneousInterpreter: ObservableObject {
     @Published private(set) var inFlight = ""
     @Published private(set) var chunks: [InterpretedChunk] = []
     @Published var errorText: String?
-    @Published var echoCancellationActive = false
-    /// Where the translation is actually coming out. Surfaced because on a glasses app "why is it
-    /// talking out of the phone" is the first thing anyone asks.
-    @Published private(set) var outputRouteName = ""
+    /// Where the translation is actually coming out, mirrored from the hub. Surfaced because on a
+    /// glasses app "why is it talking out of the phone" is the first thing anyone asks.
+    var outputRouteName: String { AudioCaptureHub.shared.outputRouteName }
 
-    /// Words that must accumulate before a chunk is sent. Lower reacts sooner but gives the
-    /// translator less to work with, which costs accuracy on languages that reorder heavily.
-    var chunkWords = 6
-    /// Hard ceiling on how long settled words may wait for company. This, not the speaker's
-    /// pauses, is what bounds the delay.
-    var maxHold: TimeInterval = 2.0
-    /// Slightly quicker than default so the queue drains rather than falling further behind.
-    var speechRate: Float = AVSpeechUtteranceDefaultSpeechRate * 1.08
+    /// How long a gap in speech counts as the speaker finishing a thought. The one knob that
+    /// matters: too short and it cuts inside sentences again, too long and the interpreter lags.
+    var pauseSeconds: Double = 0.55
+    /// Safety valve for speech with no real pauses at all (someone reading aloud). Generous on
+    /// purpose -- it exists so the delay stays bounded, not to do the cutting.
+    var runawayWords = 40
+    /// 1.5x. The interpreter always starts behind the speaker and must make the time back inside
+    /// each segment, or the gap grows for the whole conversation.
+    var speechRate: Float = AVSpeechUtteranceDefaultSpeechRate * 1.5
 
-    private let engine = AVAudioEngine()
     private let voice = InterpreterVoice()
-    private var recognizer: SFSpeechRecognizer?
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
+    private var listener: AudioCaptureHub.Listener?
 
-    /// The previous hypothesis, for the local-agreement comparison.
+    /// The most recent transcript of the running recognition task, as words.
     private var lastHypothesis: [String] = []
+    /// Running estimate of the room's background level, for the pause detector.
+    private var noiseFloor: Float = 0.01
+    private var silenceSeconds: Double = 0
+    /// Whether anything was actually said since the last cut, so silence alone can't emit.
+    private var hadSpeechSinceFlush = false
     /// How many words of the current recognition task have already been sent downstream.
     private var committedCount = 0
-    private var holdTimer: Timer?
-    private var routeObserver: NSObjectProtocol?
     private var source = TranslatorLanguage.sources[0]
 
     private(set) lazy var pending: AsyncStream<UUID> = AsyncStream { self.pendingContinuation = $0 }
@@ -168,57 +169,24 @@ final class SimultaneousInterpreter: ObservableObject {
         guard !isRunning else { return }
         errorText = nil
         self.source = source
-        _ = pending
 
-        guard await requestPermissions() else {
+        guard await Self.requestPermissions() else {
             errorText = "Microphone and speech-recognition permission are both needed."
             return
         }
-        guard let recognizer = SFSpeechRecognizer(locale: source.speechLocale), recognizer.isAvailable else {
-            errorText = "This phone can't recognise \(source.name) speech. Add the language under "
-                + "iOS Settings → General → Keyboard → Dictation."
-            return
-        }
-        self.recognizer = recognizer
 
         do {
-            let session = AVAudioSession.sharedInstance()
-            // No .defaultToSpeaker. That option pins playback to the built-in speaker for the whole
-            // category, which overrode the glasses and the headphones -- the translation came out
-            // of the phone even with a headset connected. Routing is decided below instead, from
-            // what is actually plugged in or paired.
-            // .allowBluetoothA2DP keeps playback in stereo on the glasses while capture stays on
-            // the phone's own microphone; HFP would drag both down to telephone quality.
-            try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.duckOthers, .allowBluetoothA2DP])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-                try? session.setPreferredInput(builtIn)
-            }
-            applyOutputRoute()
-            observeRouteChanges()
-
-            // Echo cancellation is only worth its cost when there is nothing between the speaker
-            // and the microphone. With a headset the separation is physical, and voice processing
-            // would trade away audio quality for a problem that no longer exists -- so it is
-            // switched on only when falling back to the phone's own speaker.
-            if Self.hasExternalOutput(session) {
-                echoCancellationActive = false
-            } else {
-                do {
-                    // Must happen before the engine starts and before any format is read: enabling
-                    // it changes the node's format.
-                    try engine.inputNode.setVoiceProcessingEnabled(true)
-                    try engine.outputNode.setVoiceProcessingEnabled(true)
-                    echoCancellationActive = true
-                } catch {
-                    echoCancellationActive = false
-                    NSLog("[VisionClaw] voice processing unavailable: %@", "\(error)")
-                }
-            }
-
-            voice.attach(to: engine)
-            try startRecognition()
+            // The hub owns the microphone; playback attaches to its engine so echo cancellation
+            // can see the translation as a reference signal when it plays out of the speaker.
+            voice.attach(to: AudioCaptureHub.shared.audioEngine)
+            listener = try AudioCaptureHub.shared.addListener(
+                locale: source.speechLocale,
+                onTranscript: { [weak self] text, isFinal in
+                    self?.ingest(text, isFinal: isFinal)
+                },
+                onLevel: { [weak self] rms, seconds in
+                    self?.observeLevel(rms, seconds: seconds)
+                })
             voice.start()
             isRunning = true
         } catch {
@@ -227,57 +195,26 @@ final class SimultaneousInterpreter: ObservableObject {
         }
     }
 
-    /// Anything that isn't the phone's own speaker or earpiece: headphones, the glasses, AirPods,
-    /// CarPlay. When one is present it should get the audio, and it needs no echo cancellation.
-    nonisolated static func hasExternalOutput(_ session: AVAudioSession) -> Bool {
-        session.currentRoute.outputs.contains { output in
-            output.portType != .builtInSpeaker && output.portType != .builtInReceiver
-        }
-    }
-
-    /// Send the translation to a headset if there is one, and to the loudspeaker if there isn't.
-    /// Without the override, .playAndRecord with no headset plays out of the earpiece, which is too
-    /// quiet to use with the phone on a table.
-    private func applyOutputRoute() {
-        let session = AVAudioSession.sharedInstance()
-        if Self.hasExternalOutput(session) {
-            try? session.overrideOutputAudioPort(.none)
-        } else {
-            try? session.overrideOutputAudioPort(.speaker)
-        }
-        outputRouteName = session.currentRoute.outputs.first?.portName ?? ""
-    }
-
-    /// Glasses that connect, disconnect or fall asleep mid-conversation change the route underneath
-    /// us; without this the audio would stay wherever it was when Start was pressed.
-    private func observeRouteChanges() {
-        guard routeObserver == nil else { return }
-        routeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.applyOutputRoute() }
-        }
-    }
-
     func stop() {
-        if let routeObserver {
-            NotificationCenter.default.removeObserver(routeObserver)
-            self.routeObserver = nil
-        }
-        holdTimer?.invalidate()
-        holdTimer = nil
         voice.stop()
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        task?.cancel()
-        request = nil
-        task = nil
+        AudioCaptureHub.shared.removeListener(listener)
+        listener = nil
         inFlight = ""
         lastHypothesis = []
         committedCount = 0
+        silenceSeconds = 0
+        hadSpeechSinceFlush = false
         isRunning = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private static func requestPermissions() async -> Bool {
+        let speech = await withCheckedContinuation { c in
+            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
+        }
+        guard speech == .authorized else { return false }
+        return await withCheckedContinuation { c in
+            AVAudioSession.sharedInstance().requestRecordPermission { c.resume(returning: $0) }
+        }
     }
 
     func clear() {
@@ -295,82 +232,73 @@ final class SimultaneousInterpreter: ObservableObject {
         if speak { voice.speak(translation, language: language, rate: speechRate) }
     }
 
-    // MARK: Recognition
+    // MARK: Segmentation
 
-    private func startRecognition() throws {
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        if recognizer?.supportsOnDeviceRecognition == true {
-            request.requiresOnDeviceRecognition = true
+    /// Keep the latest transcript. Nothing is emitted from here any more: WHEN to cut is decided
+    /// by silence in the audio (see `observeLevel`), not by counting words.
+    ///
+    /// The previous version cut every N words or on a timer, which is why phrases came out sliced
+    /// mid-thought -- a translator handed half a clause has nothing to work with, and no model,
+    /// local or cloud, recovers from that. Speakers already mark their own boundaries by pausing;
+    /// this waits for those instead of guessing.
+    private func ingest(_ transcript: String, isFinal: Bool) {
+        let words = transcript.split(separator: " ").map(String.init)
+        guard !words.isEmpty else {
+            inFlight = ""
+            return
         }
-        self.request = request
-        lastHypothesis = []
-        committedCount = 0
+        lastHypothesis = words
+        inFlight = words.dropFirst(committedCount).joined(separator: " ")
 
-        let input = engine.inputNode
-        let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { throw InterpreterError.noMicrophone }
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
+        // A final result means iOS itself decided the utterance ended, and a sentence-ending mark
+        // is the same signal from the other direction. Neither is worth waiting out a pause for.
+        let terminators: Set<Character> = [".", "?", "!", "\u{3002}", "\u{FF1F}", "\u{FF01}"]
+        let endsSentence = words.last?.last.map { terminators.contains($0) } ?? false
+        if isFinal || endsSentence {
+            flushPending()
+            return
         }
-        engine.prepare()
-        try engine.start()
+        // Someone reading aloud can run a long time without a real pause. A safety valve, not the
+        // normal path -- deliberately generous so it almost never fires mid-thought.
+        if words.count - committedCount >= runawayWords {
+            flushPending()
+        }
+    }
 
-        task = recognizer?.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            Task { @MainActor in
-                if let result {
-                    self.ingest(result.bestTranscription.formattedString, isFinal: result.isFinal)
-                }
-                if error != nil || result?.isFinal == true {
-                    self.restartIfRunning()
-                }
+    /// Voice-activity detection over the microphone level.
+    ///
+    /// The noise floor is tracked rather than hardcoded: a cafe and a quiet room differ by an order
+    /// of magnitude, so a fixed threshold would either cut constantly in one or never in the other.
+    /// It drifts down quickly and up slowly, which settles it on the room rather than on the voice.
+    private func observeLevel(_ rms: Float, seconds: Double) {
+        noiseFloor = rms < noiseFloor
+            ? (noiseFloor * 0.9 + rms * 0.1)
+            : (noiseFloor * 0.999 + rms * 0.001)
+        let isSpeech = rms > max(noiseFloor * 2.5, 0.008)
+
+        if isSpeech {
+            silenceSeconds = 0
+            hadSpeechSinceFlush = true
+        } else {
+            silenceSeconds += seconds
+            // A pause only means something if words came before it; silence in an empty room must
+            // not keep emitting nothing.
+            if hadSpeechSinceFlush, silenceSeconds >= pauseSeconds {
+                flushPending()
             }
         }
     }
 
-    /// The local-agreement step. Everything here runs on every partial result, which arrive several
-    /// times a second, so it stays deliberately cheap.
-    private func ingest(_ transcript: String, isFinal: Bool) {
-        let words = transcript.split(separator: " ").map(String.init)
-        guard !words.isEmpty else { return }
-
-        // Words both the previous and the current hypothesis agree on. A recogniser that has
-        // revised a word once and left it alone has effectively settled it.
-        var agreed = 0
-        while agreed < words.count, agreed < lastHypothesis.count, words[agreed] == lastHypothesis[agreed] {
-            agreed += 1
-        }
-        lastHypothesis = words
-
-        let settled = words.prefix(agreed).dropFirst(committedCount).map { $0 }
-        inFlight = words.dropFirst(max(committedCount, agreed)).joined(separator: " ")
-
-        guard !settled.isEmpty else { return }
-        let endsSentence = settled.last.map {
-            $0.hasSuffix(".") || $0.hasSuffix("?") || $0.hasSuffix("!")
-                || $0.hasSuffix("。") || $0.hasSuffix("？") || $0.hasSuffix("！")
-        } ?? false
-
-        if isFinal || endsSentence || settled.count >= chunkWords {
-            emit(settled, advancingTo: agreed)
-        } else {
-            // Not enough yet — but don't let it wait indefinitely for a talker who trails off.
-            scheduleHold(settled, agreed: agreed)
-        }
-    }
-
-    private func scheduleHold(_ settled: [String], agreed: Int) {
-        holdTimer?.invalidate()
-        holdTimer = Timer.scheduledTimer(withTimeInterval: maxHold, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.emit(settled, advancingTo: agreed) }
-        }
+    /// Emit everything heard since the last cut as one segment.
+    private func flushPending() {
+        hadSpeechSinceFlush = false
+        silenceSeconds = 0
+        guard lastHypothesis.count > committedCount else { return }
+        let words = Array(lastHypothesis.dropFirst(committedCount))
+        emit(words, advancingTo: lastHypothesis.count)
     }
 
     private func emit(_ words: [String], advancingTo newCommitted: Int) {
-        holdTimer?.invalidate()
-        holdTimer = nil
         guard newCommitted > committedCount else { return }
         let text = words.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -378,35 +306,5 @@ final class SimultaneousInterpreter: ObservableObject {
         let chunk = InterpretedChunk(original: text, translated: nil)
         chunks.append(chunk)
         pendingContinuation?.yield(chunk.id)
-    }
-
-    /// iOS caps how long one recognition request may run. Restart transparently: a conversation
-    /// that quietly stopped being translated halfway through would be worse than a visible failure.
-    private func restartIfRunning() {
-        guard isRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        request = nil
-        task = nil
-        do {
-            try startRecognition()
-        } catch {
-            errorText = error.localizedDescription
-            stop()
-        }
-    }
-
-    private func requestPermissions() async -> Bool {
-        let speech = await withCheckedContinuation { c in
-            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) }
-        }
-        guard speech == .authorized else { return false }
-        return await withCheckedContinuation { c in
-            AVAudioSession.sharedInstance().requestRecordPermission { c.resume(returning: $0) }
-        }
-    }
-
-    enum InterpreterError: LocalizedError {
-        case noMicrophone
-        var errorDescription: String? { "No usable microphone input." }
     }
 }

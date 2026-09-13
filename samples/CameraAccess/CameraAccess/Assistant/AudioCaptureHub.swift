@@ -104,17 +104,24 @@ final class AudioCaptureHub: ObservableObject {
                      onFinal: @escaping (String) -> Void,
                      onVolatile: ((String) -> Void)? = nil,
                      onLevel: ((Float, Double) -> Void)? = nil) async throws -> Listener {
-        let listener = Listener(locale: locale, onFinal: onFinal,
+        // Резолв через SpeechTranscriber, а не сырой Locale(identifier:). Это не формальность:
+        // без него скачивание может тихо кончиться состоянием "Not Installing" — assetInstallationRequest
+        // берёт «поддерживаемый» локаль за чистую монету, а сервер потом не находит под него
+        // готового ассета. supportedLocale(equivalentTo:) сверяется с реально доступными сборками
+        // и подбирает совпадающий вариант (например, другой региональный код) вместо этого.
+        let resolved = try await ensureLanguageModel(for: locale)
+
+        let listener = Listener(locale: resolved, onFinal: onFinal,
                                 onVolatile: onVolatile, onLevel: onLevel)
         if !isRunning {
             try startEngine()
         }
         // Один язык — один канал: эфир и фраза-триггер слушают одно и то же и не должны
         // резервировать языковую модель дважды.
-        if let existing = channels.first(where: { $0.locale.identifier == locale.identifier }) {
+        if let existing = channels.first(where: { $0.locale.identifier == resolved.identifier }) {
             existing.listeners.append(listener)
         } else {
-            let channel = try await makeChannel(locale: locale)
+            let channel = try await makeChannel(locale: resolved)
             channel.listeners.append(listener)
             channels.append(channel)
         }
@@ -133,17 +140,57 @@ final class AudioCaptureHub: ObservableObject {
         if channels.isEmpty { stopEngine() }
     }
 
-    // MARK: Канал распознавания
+    // MARK: Языковая модель
 
-    private func makeChannel(locale: Locale) async throws -> Channel {
-        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+    /// Резолвит `locale` в реально поддерживаемый и скачивает его модель, если её ещё нет.
+    ///
+    /// Отдельный метод, а не часть makeChannel: кнопка «Скачать» в настройках должна уметь
+    /// подготовить язык заранее, до первого включения микрофона, без запуска аудиодвижка —
+    /// минутное скачивание не должно всплывать сюрпризом посреди разговора или срывать первую
+    /// попытку что-то спросить.
+    ///
+    /// Резолв через SpeechTranscriber.supportedLocale(equivalentTo:), а не сырой
+    /// Locale(identifier:), — не формальность: без него скачивание может тихо кончиться
+    /// состоянием "Not Installing", потому что assetInstallationRequest берёт «поддерживаемый»
+    /// локаль за чистую монету, а сервер потом не находит под него готового ассета.
+    /// supportedLocale(equivalentTo:) сверяется с реально доступными сборками и подбирает
+    /// совпадающий вариант вместо этого.
+    @discardableResult
+    func ensureLanguageModel(for locale: Locale) async throws -> Locale {
+        guard let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
+            throw HubError.unsupportedLanguage(locale.identifier)
+        }
 
-        // Модель языка скачивается один раз. nil здесь означает «уже установлена», а не ошибку.
+        let alreadyInstalled = await SpeechTranscriber.installedLocales
+        if alreadyInstalled.contains(where: { $0.identifier == resolved.identifier }) {
+            return resolved
+        }
+
+        let transcriber = SpeechTranscriber(locale: resolved, preset: .progressiveTranscription)
+        // nil здесь означает «уже установлена между проверками выше и этой строкой», а не ошибку.
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             isPreparingModel = true
             defer { isPreparingModel = false }
             try await request.downloadAndInstall()
         }
+
+        // На форуме Apple разработчики (подтверждено их же сотрудником) сообщают, что
+        // supportedLocale() иногда называет язык поддерживаемым, а установка после этого тихо
+        // проваливается — install-заявка зависает в "Not Installing", и downloadAndInstall() не
+        // бросает исключение. Проверяем итог явно, чтобы получить понятную ошибку вместо
+        // молчаливо неработающего микрофона.
+        let installed = await SpeechTranscriber.installedLocales
+        guard installed.contains(where: { $0.identifier == resolved.identifier }) else {
+            throw HubError.assetNotInstalled(resolved.identifier)
+        }
+        return resolved
+    }
+
+    // MARK: Канал распознавания
+
+    private func makeChannel(locale: Locale) async throws -> Channel {
+        // Модель уже гарантированно установлена вызывающей стороной (ensureLanguageModel).
+        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
 
         let naturalFormat = engine.inputNode.inputFormat(forBus: 0)
         // Частоту дискретизации нельзя задавать самим: анализатор её не приводит, а маршрут
@@ -419,6 +466,7 @@ final class AudioCaptureHub: ObservableObject {
         case noMicrophone
         case noCompatibleFormat
         case unsupportedLanguage(String)
+        case assetNotInstalled(String)
 
         var errorDescription: String? {
             switch self {
@@ -428,6 +476,9 @@ final class AudioCaptureHub: ObservableObject {
                 return "Не удалось подобрать формат звука для распознавания."
             case .unsupportedLanguage(let id):
                 return "Распознавание \(id) на этом телефоне недоступно."
+            case .assetNotInstalled(let id):
+                return "Не удалось установить языковую модель \(id). Попробуйте ещё раз позже — "
+                    + "иногда сервер Apple временно не отдаёт пакет для этого языка."
             }
         }
     }

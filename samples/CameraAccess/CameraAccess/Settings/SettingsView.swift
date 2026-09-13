@@ -12,6 +12,7 @@ struct SettingsView: View {
     private let settings = SettingsManager.shared
 
     @State private var showResetConfirmation = false
+    @State private var languageDownloadResult: LanguageDownloadResult?
     @AppStorage(CaptureSource.defaultsKey) private var captureSourceRaw = CaptureSource.automatic.rawValue
     @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
     @AppStorage(SettingsManager.speechLocaleKey) private var speechLocaleRaw = ""
@@ -152,6 +153,12 @@ struct SettingsView: View {
 
     // MARK: Голос
 
+    private var activeSpeechLocale: Locale {
+        speechLocaleRaw.isEmpty
+            ? Locale(identifier: Locale.preferredLanguages.first ?? Locale.current.identifier)
+            : Locale(identifier: speechLocaleRaw)
+    }
+
     private var voiceSection: some View {
         Section {
             Picker(selection: $speechLocaleRaw) {
@@ -162,10 +169,52 @@ struct SettingsView: View {
             } label: {
                 SettingsRow(icon: "mic.fill", tint: .blue, title: "Язык распознавания")
             }
+            .onChange(of: speechLocaleRaw) { _, _ in languageDownloadResult = nil }
+
+            Button {
+                Task { await downloadLanguageModel() }
+            } label: {
+                HStack {
+                    SettingsRow(icon: "arrow.down.circle.fill", tint: .cyan, title: "Скачать языковую модель")
+                    if hub.isPreparingModel {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            .disabled(hub.isPreparingModel)
+
+            if let result = languageDownloadResult {
+                switch result {
+                case .success:
+                    StatusLine(kind: .good, text: "Модель установлена и готова к работе")
+                case .failure(let message):
+                    StatusLine(kind: .warning, text: message)
+                }
+            }
         } header: {
             Text("Голос")
         } footer: {
-            Text("Язык, который слушает микрофон в чате и в голосовых командах.")
+            // Загрузка обычно происходит сама при первом включении микрофона, но эта кнопка
+            // проверяет и качает модель заранее, а главное — показывает настоящую причину сбоя,
+            // если сервер Apple временно не отдал пакет для языка: без неё это выглядело как
+            // «микрофон не работает», хотя дело было в одной неудачной попытке скачивания.
+            Text("Язык, который слушает микрофон в чате и в голосовых командах. Скачивается один "
+                 + "раз и работает дальше без сети.")
+        }
+    }
+
+    private enum LanguageDownloadResult {
+        case success
+        case failure(String)
+    }
+
+    private func downloadLanguageModel() async {
+        languageDownloadResult = nil
+        do {
+            try await AudioCaptureHub.shared.ensureLanguageModel(for: activeSpeechLocale)
+            languageDownloadResult = .success
+        } catch {
+            languageDownloadResult = .failure(error.localizedDescription)
         }
     }
 

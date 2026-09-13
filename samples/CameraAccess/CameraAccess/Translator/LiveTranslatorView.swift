@@ -615,19 +615,18 @@ struct LiveTranslatorView: View {
         let availability = LanguageAvailability()
         let status = await availability.status(from: source.translationLanguage,
                                                to: target.translationLanguage)
-        switch status {
-        case .unsupported:
-            engine.errorText = "\(source.name) → \(target.name) isn't a pair iOS can translate."
+        // .supported means iOS can do this pair but hasn't downloaded the pack yet; building the
+        // configuration is what prompts for it, so it needs no separate flag or branch.
+        if status == .unsupported, translationEngine == .apple {
+            engine.errorText = "\(source.name) → \(target.name) isn't a pair Apple Translate "
+                + "handles. Switch the translator to Qwen3 below."
             configuration = nil
-        case .supported:
-            downloadNeeded = true
-            fallthrough
-        default:
-            engine.errorText = nil
-            configuration = TranslationSession.Configuration(
-                source: source.translationLanguage,
-                target: target.translationLanguage
-            )
+            return
         }
+        engine.errorText = nil
+        configuration = TranslationSession.Configuration(
+            source: source.translationLanguage,
+            target: target.translationLanguage
+        )
     }
 }

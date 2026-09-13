@@ -347,7 +347,12 @@ struct LiveTranslatorView: View {
             // stream below and each translation lands back on its own segment.
             .translationTask(configuration) { session in
                 do {
-                    try await session.prepareTranslation()
+                    // Only Apple's path needs a language pack. Preparing unconditionally asked a
+                    // Qwen3 user to download one they will never use -- and the phrase pump lives
+                    // inside this task either way, so the session simply goes unused instead.
+                    if translationEngine == .apple {
+                        try await session.prepareTranslation()
+                    }
                     for await id in engine.phrases {
                         guard let segment = engine.segment(id) else { continue }
                         let text: String

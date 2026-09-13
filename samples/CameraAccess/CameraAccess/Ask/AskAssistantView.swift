@@ -18,6 +18,7 @@ struct AskAssistantView: View {
 
     @StateObject private var speechRecognizer = SpeechRecognizerOneShot.shared
     @StateObject private var speechSynthesizer = SpeechSynthesizer.shared
+    @StateObject private var fastVLM = FastVLMService.shared
 
     @State private var questionText = ""
     @State private var attachedImage: UIImage?
@@ -78,7 +79,12 @@ struct AskAssistantView: View {
                             if isAsking {
                                 HStack(spacing: 10) {
                                     ProgressView().tint(.white)
-                                    Text("Thinking…")
+                                    // First question on the local model spends tens of seconds
+                                    // parsing weights and compiling Metal shaders before any
+                                    // generation starts -- say so, or it reads as a hang.
+                                    Text(fastVLM.isLoadingModel
+                                         ? "Loading the model into memory — first run takes a minute…"
+                                         : "Thinking…")
                                         .font(.subheadline)
                                         .foregroundStyle(.white.opacity(0.7))
                                 }

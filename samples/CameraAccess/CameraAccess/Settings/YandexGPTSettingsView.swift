@@ -32,7 +32,7 @@ struct YandexGPTSettingsView: View {
                     Text("Folder ID")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    TextField("b1g...", text: $folderId)
+                    TextField("b1gxxxxxxxxxxxxxxxxx", text: $folderId)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
                         .font(.system(.body, design: .monospaced))
@@ -44,8 +44,15 @@ struct YandexGPTSettingsView: View {
                     Label("Both fields are required for the YandexGPT backend", systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange).font(.caption)
                 } else {
-                    Label("Configured", systemImage: "checkmark.circle.fill")
-                        .foregroundColor(.green).font(.caption)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Configured", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(.green).font(.caption)
+                        // The single most common mistake: typing a folder NAME (like "dev")
+                        // where Yandex wants the folder's ID. The API rejects that with a 403,
+                        // which reads like a broken key even though the key is fine.
+                        Text("Folder ID is the b1g… identifier from the Yandex Cloud console — not the folder's name.")
+                            .font(.caption)
+                    }
                 }
             }
 
@@ -68,8 +75,22 @@ struct YandexGPTSettingsView: View {
                         Label("Connected", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
                     case .failure(let message):
-                        Label(message, systemImage: "xmark.circle.fill")
-                            .foregroundColor(.red)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(message, systemImage: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            // Yandex's 403 for a wrong folder names the CORRECT id in the same
+                            // sentence ("does not match with service account folder ID 'b1g…'"),
+                            // so the fix is one tap rather than a trip to the cloud console.
+                            if let suggested = Self.suggestedFolderId(in: message), suggested != folderId {
+                                Button {
+                                    folderId = suggested
+                                    saveSettings()
+                                    checkConnection()
+                                } label: {
+                                    Label("Use \(suggested)", systemImage: "wand.and.stars")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -95,6 +116,17 @@ struct YandexGPTSettingsView: View {
             folderId = settings.yandexGPTFolderId
         }
         .onDisappear { saveSettings() }
+    }
+
+    /// Pulls the correct folder id out of Yandex's own error text:
+    /// "... does not match with service account folder ID 'b1gl3djn8rjbditqrul4' ...".
+    /// Returns nil when the message isn't that specific error.
+    static func suggestedFolderId(in message: String) -> String? {
+        guard let range = message.range(of: "service account folder ID '") else { return nil }
+        let rest = message[range.upperBound...]
+        guard let end = rest.firstIndex(of: "'") else { return nil }
+        let candidate = String(rest[..<end])
+        return candidate.isEmpty ? nil : candidate
     }
 
     private func saveSettings() {

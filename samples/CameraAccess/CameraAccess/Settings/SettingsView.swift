@@ -94,8 +94,13 @@ struct SettingsView: View {
           }
         }
 
-        // Cloud gateway is the only backend now.
-        if true {
+        // Account / connected-apps / gateway plumbing belongs to the LiveKit path only
+        // (OpenAI and Gemini answer through the hosted agent worker). GigaChat, YandexGPT and
+        // the local model talk to their own endpoint straight from the phone and never touch
+        // any of it -- showing it to them surfaced a "Status: Not set up", a Connected Apps
+        // screen that can only fail with "Cloud backend not configured", and someone else's
+        // pilot-study gateway URL, all of which read as the app being broken.
+        if !(IntelligenceEngine(rawValue: intelligenceRaw) ?? .openai).isDirect {
           Section {
             if let accountEmail, !accountEmail.isEmpty {
               HStack {
@@ -163,7 +168,7 @@ struct SettingsView: View {
             LocalMLXSettingsView()
           }
         } footer: {
-          Text("Configure GigaChat (Sber), YandexGPT (Yandex Cloud), or the on-device FastVLM model. Selecting one as the active engine is added separately, once the \"ask\" screen lands.")
+          Text("Keys and model download for the three backends that run straight from this phone. Pick which one answers under Intelligence above.")
         }
 
         Section {

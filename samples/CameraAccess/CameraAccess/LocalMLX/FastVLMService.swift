@@ -40,6 +40,10 @@ final class FastVLMService: ObservableObject {
     // MARK: - Published state
 
     @Published private(set) var isModelLoaded = false
+    /// True while weights are being parsed and Metal shaders compiled on first use. That takes
+    /// tens of seconds and shows no network activity, so the UI has to say what's happening or it
+    /// reads as a hang.
+    @Published private(set) var isLoadingModel = false
     @Published var downloadProgress: Double = 0
     /// True once the bytes on disk have reached the expected size but `loadModelContainer` hasn't
     /// returned yet — the remaining time is weight parsing / first-run Metal shader compilation,
@@ -120,7 +124,13 @@ final class FastVLMService: ObservableObject {
         var lastError: Error?
         for attempt in 1...maxAttempts {
             do {
-                _ = try await loadModelContainer { p in onProgress(p) }
+                // Keep what the download already loaded. loadModelContainer both fetches the
+                // weights AND materializes them; throwing that container away meant a freshly
+                // downloaded model still counted as "not loaded" until something called
+                // connect() — which nothing did.
+                let container = try await loadModelContainer { p in onProgress(p) }
+                modelContainer = container
+                isModelLoaded = true
                 downloadProgress = 1
                 return
             } catch is CancellationError {
@@ -156,6 +166,8 @@ final class FastVLMService: ObservableObject {
             throw FastVLMError.backgrounded
         }
         Memory.cacheLimit = 20 * 1024 * 1024
+        isLoadingModel = true
+        defer { isLoadingModel = false }
         do {
             let container = try await loadModelContainer { _ in }
             modelContainer = container
@@ -178,8 +190,17 @@ final class FastVLMService: ObservableObject {
     /// kept — each call is a fresh turn (VisionClaw's interaction model is a single "ask" button,
     /// not a running conversation).
     func ask(text: String, imageData: Data?) async throws -> String {
-        guard let container = modelContainer else { throw FastVLMError.modelNotLoaded }
         guard UIApplication.shared.applicationState != .background else { throw FastVLMError.backgrounded }
+        // Load on first use. Nothing else in the app calls connect(), so requiring it here just
+        // made every question fail with "model isn't loaded" on a model that was sitting fully
+        // downloaded on disk. Loading is idempotent and cheap once the container exists.
+        if modelContainer == nil {
+            guard Self.downloadedSizeBytes() >= Self.expectedDownloadBytes / 2 else {
+                throw FastVLMError.notDownloaded
+            }
+            try await connect()
+        }
+        guard let container = modelContainer else { throw FastVLMError.modelNotLoaded }
         cancelRequested = false
 
         var visionImage: CIImage?
@@ -315,13 +336,16 @@ final class FastVLMService: ObservableObject {
     }
 
     enum FastVLMError: LocalizedError {
+        case notDownloaded
         case modelNotLoaded
         case backgrounded
 
         var errorDescription: String? {
             switch self {
+            case .notDownloaded:
+                return "The local model isn't on this phone yet. Download it in Settings → Local Model."
             case .modelNotLoaded:
-                return "The local model isn't loaded. Download it in Settings → Local Model."
+                return "The local model failed to load into memory. Try again, or re-download it in Settings → Local Model."
             case .backgrounded:
                 return "On-device AI can't run while the app is in the background. Bring VisionClaw to the foreground."
             }

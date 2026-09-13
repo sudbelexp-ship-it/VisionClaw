@@ -69,6 +69,12 @@ struct GigaChatSettingsView: View {
                             .foregroundColor(.red)
                     }
                 }
+
+                // "Test connection" can only ever say yes or no. When it says no, this is the
+                // screen that says which of the five possible causes it was.
+                NavigationLink("Diagnostics") {
+                    GigaChatDiagnosticsView()
+                }
             }
 
             Section {

@@ -99,6 +99,36 @@
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!--
+		  GigaChat's hosts present a chain anchored to the Russian Ministry of Digital Development
+		  root CA, which is not in Apple's system trust store. GigaChatTrustDelegate supplies that
+		  root as an anchor and validates the chain itself, but a trust delegate alone is not
+		  enough: ATS evaluates the connection independently and fails it before the delegate is
+		  ever asked, which is exactly why the app reported a bare "A TLS error caused the secure
+		  connection to fail" with no detail from our own SecTrust check. Apple's QA1948 states the
+		  requirement directly: overriding NSURLSession's server trust evaluation additionally
+		  requires disabling ATS for that server.
+
+		  NSExceptionAllowsInsecureHTTPLoads is misleadingly named: it does not permit plain HTTP
+		  here, it stops ATS from requiring a system-anchored chain and hands that decision to our
+		  delegate. Everything else stays strict: TLS 1.2 minimum (the servers negotiate 1.3),
+		  forward secrecy required, and the chain still has to match the pinned Минцифры anchors,
+		  so this is scoped to Sber's hosts and narrows nothing else.
+		-->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>devices.sberbank.ru</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSExceptionMinimumTLSVersion</key>
+				<string>TLSv1.2</string>
+				<key>NSExceptionRequiresForwardSecrecy</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>

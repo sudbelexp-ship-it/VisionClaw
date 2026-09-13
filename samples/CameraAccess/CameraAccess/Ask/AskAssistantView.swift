@@ -126,6 +126,11 @@ struct AskAssistantView: View {
         .onChange(of: speechRecognizer.transcript) { newValue in
             questionText = newValue
         }
+        // A dictation attempt that produced nothing used to end in silence — red mic off, empty
+        // field, no explanation. The recognizer now says which of the distinct failures happened.
+        .onChange(of: speechRecognizer.lastError) { newValue in
+            if let newValue { errorMessage = newValue }
+        }
         .onDisappear {
             speechRecognizer.stop()
             speechSynthesizer.stop()

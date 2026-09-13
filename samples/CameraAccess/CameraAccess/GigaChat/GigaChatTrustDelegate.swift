@@ -32,9 +32,20 @@ final class GigaChatTrustDelegate: NSObject, URLSessionDelegate {
     /// all," not per-instance state.
     static private(set) var lastTrustEvaluationError: String?
 
+    /// How many server-trust challenges this delegate has been handed for a GigaChat host. The
+    /// single most valuable number in the whole diagnosis: `lastTrustEvaluationError == nil` is
+    /// ambiguous (it means either "the check passed" or "we were never asked"), and those two point
+    /// at opposite causes. Zero here while a request fails means the connection died before trust
+    /// evaluation — the signature of ATS rejecting a non-system-anchored chain, not of a bad
+    /// certificate. See the NSExceptionDomains block in Info.plist.
+    static private(set) var challengeCount = 0
+    /// Anchors actually parsed out of the bundle at init, for the diagnostics screen.
+    static private(set) var loadedAnchorCount = 0
+
     override init() {
         self.anchorCertificates = Self.loadAnchorCertificates()
         super.init()
+        Self.loadedAnchorCount = anchorCertificates.count
         if anchorCertificates.isEmpty {
             NSLog("[GigaChat] WARNING: Минцифры certificates not loaded from bundle — GigaChat requests will fail with a TLS error")
         }
@@ -44,6 +55,12 @@ final class GigaChatTrustDelegate: NSObject, URLSessionDelegate {
     /// intermediate) — for a diagnostics screen, the only way to check this without a Mac/Xcode.
     static func bundledCertificateCount() -> Int {
         loadAnchorCertificates().count
+    }
+
+    /// The same anchors, for code that validates a chain outside URLSession (the Network.framework
+    /// probe in GigaChatDiagnostics, which bypasses ATS and so isolates it as the cause).
+    static func bundledAnchors() -> [SecCertificate] {
+        loadAnchorCertificates()
     }
 
     func urlSession(
@@ -64,6 +81,7 @@ final class GigaChatTrustDelegate: NSObject, URLSessionDelegate {
             return
         }
 
+        Self.challengeCount += 1
         SecTrustSetAnchorCertificates(serverTrust, anchorCertificates as CFArray)
         SecTrustSetAnchorCertificatesOnly(serverTrust, false)
 

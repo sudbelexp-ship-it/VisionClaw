@@ -5,7 +5,7 @@
 // и Яндекса платное за каждый кадр), ни по смыслу: на ходу почти все кадры смазаны, и модель
 // честно отвечает про смазанное пятно.
 //
-// Поэтому здесь три вещи, и все три нужны:
+// Поэтому здесь четыре вещи:
 //
 //   1. Дросселирование до 1 кадра в секунду. Ровно то же делает AI-Smart-Glasses, откуда взят
 //      ориентир; больше не нужно ни одному из режимов.
@@ -14,10 +14,15 @@
 //      это не режим гида, это счётчик.
 //   3. Проверка на покой. Кадр берётся, только если последнюю секунду сцена почти не менялась.
 //      Это и отсев смаза, и признак того, что человек на что-то СМОТРИТ, а не проходит мимо.
+//   4. Распознавание указательного жеста через Vision (VNDetectHumanHandPoseRequest, штатный
+//      фреймворк с iOS 14 — сторонних CV-библиотек не нужно). Не просьба к самой модели зрения
+//      угадать жест по фото — отдельное, дешёвое распознавание прямо на кадре при throttling до
+//      1 Гц, результат которого LiveSession использует как отдельный триггер вопроса.
 
 import CoreImage
 import CoreVideo
 import UIKit
+import Vision
 
 @MainActor
 final class LiveFrameBuffer: ObservableObject {
@@ -25,6 +30,9 @@ final class LiveFrameBuffer: ObservableObject {
     @Published private(set) var latest: UIImage?
     /// Сколько кадров прошло обработку — для отладки, не для интерфейса.
     @Published private(set) var processedCount = 0
+    /// Указательный палец виден в последнем обработанном кадре. Уровень, а не однократное
+    /// событие — LiveSession сам решает, что делать с фронтом/удержанием этого состояния.
+    @Published private(set) var isPointing = false
 
     /// Насколько должны отличаться отпечатки, чтобы считать сцену сменившейся. 0.06 подобрано под
     /// шум матрицы: ниже — срабатывает на дрожании головы, выше — не замечает смену экспоната.
@@ -101,11 +109,13 @@ final class LiveFrameBuffer: ObservableObject {
 
         let image = UIImage(cgImage: cgImage)
         let signature = Self.makeSignature(cgImage)
-        Task { @MainActor in self.apply(image: image, signature: signature) }
+        let pointing = Self.detectPointing(cgImage)
+        Task { @MainActor in self.apply(image: image, signature: signature, pointing: pointing) }
     }
 
-    private func apply(image: UIImage, signature newSignature: [UInt8]) {
+    private func apply(image: UIImage, signature newSignature: [UInt8], pointing: Bool) {
         latest = image
+        isPointing = pointing
         processedCount += 1
 
         previousSignature = signature
@@ -143,5 +153,54 @@ final class LiveFrameBuffer: ObservableObject {
             total += abs(Int(a[i]) - Int(b[i]))
         }
         return Double(total) / Double(a.count) / 255.0
+    }
+
+    // MARK: Указательный жест
+
+    /// Насколько уверенно Vision должен видеть сустав, чтобы ему вообще доверять.
+    private static let jointConfidence: Float = 0.3
+    /// Во сколько раз указательный палец должен быть "длиннее" (от запястья до кончика), чем в
+    /// среднем остальные три пальца, чтобы считать его вытянутым, а не просто раскрытой ладонью.
+    /// Подобрано на глаз по геометрии ладони, не проверено на реальных руках — если срабатывает
+    /// на раскрытую ладонь или пропускает явное указание, это первое, что стоит подстроить.
+    private static let pointingRatio: CGFloat = 1.3
+
+    /// Указывает ли рука на кадре пальцем — вытянутый указательный при согнутых остальных.
+    /// Не перцептивный хеш и не сравнение с предыдущим кадром: разовое суждение по одному снимку,
+    /// геометрия ладони на нём или есть, или нет.
+    nonisolated static func detectPointing(_ cgImage: CGImage) -> Bool {
+        let request = VNDetectHumanHandPoseRequest()
+        request.maximumHandCount = 1
+        let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
+        do {
+            try handler.perform([request])
+            guard let observation = request.results?.first else { return false }
+            let points = try observation.recognizedPoints(.all)
+
+            func joint(_ name: VNHumanHandPoseObservation.JointName) -> CGPoint? {
+                guard let point = points[name], point.confidence >= jointConfidence else { return nil }
+                return point.location
+            }
+            func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }
+
+            guard let wrist = joint(.wrist), let indexTip = joint(.indexTip),
+                  let indexMCP = joint(.indexMCP)
+            else { return false }
+
+            let curledTips = [joint(.middleTip), joint(.ringTip), joint(.littleTip)].compactMap { $0 }
+            // Need at least two of the three other fingertips tracked to trust an average.
+            guard curledTips.count >= 2 else { return false }
+
+            let indexReach = distance(indexTip, wrist)
+            let averageOtherReach = curledTips.map { distance($0, wrist) }.reduce(0, +)
+                / CGFloat(curledTips.count)
+            // Extended past the other fingertips by a clear margin, and not folded back onto its
+            // own knuckle (which distance(indexTip, wrist) alone wouldn't catch on a closed fist
+            // held at an angle).
+            return indexReach > averageOtherReach * pointingRatio
+                && distance(indexTip, indexMCP) > indexReach * 0.35
+        } catch {
+            return false
+        }
     }
 }

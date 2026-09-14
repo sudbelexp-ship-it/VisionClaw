@@ -88,11 +88,22 @@ final class LiveSession: ObservableObject {
     /// слово "пропустить"), а не пиксельная эвристика.
     private static let forcedNarrationInterval: TimeInterval = 45
 
+    /// Сколько ждать после ответа на вопрос, прежде чем гид сам возьмёт слово снова. Без этой
+    /// паузы 15-секундный интервал рассказа мог истечь ровно во время разговора и перебить
+    /// человека на середине уточняющего вопроса.
+    private static let postAnswerQuietPeriod: TimeInterval = 8
+    /// Не чаще одного захвата по пальцу в столько секунд — иначе продолжающий указывать палец
+    /// переспрашивал бы об одном и том же на каждом тике.
+    private static let pointingCooldown: TimeInterval = 6
+
     private weak var streamViewModel: StreamSessionViewModel?
     private var listener: AudioCaptureHub.Listener?
-    private var guideTimer: Timer?
+    private var ticker: Timer?
     private var isBusy = false
     private var lastNarration = Date.distantPast
+    private var quietUntil = Date.distantPast
+    private var wasPointing = false
+    private var lastPointingTrigger = Date.distantPast
     private var sessionId = UUID()
 
 
@@ -147,14 +158,14 @@ final class LiveSession: ObservableObject {
             isListening = false
         }
 
-        if mode.narratesOnItsOwn { startGuideTimer() }
+        startTicker()
         isRunning = true
         status = mode.narratesOnItsOwn ? "Смотрю по сторонам" : "Слушаю"
     }
 
     func stop() {
-        guideTimer?.invalidate()
-        guideTimer = nil
+        ticker?.invalidate()
+        ticker = nil
         AudioCaptureHub.shared.removeListener(listener)
         listener = nil
         isListening = false
@@ -176,22 +187,31 @@ final class LiveSession: ObservableObject {
         framesSent = 0
     }
 
-    /// Смена режима на лету: таймер гида появляется и исчезает вместе с режимом.
+    /// Смена режима на лету. Тикер один на оба режима теперь (гид и пальцем-показ), перезапускать
+    /// его не нужно — меняется только то, что он проверяет на каждом тике.
     func modeChanged() {
         guard isRunning else { return }
-        guideTimer?.invalidate()
-        guideTimer = nil
-        if mode.narratesOnItsOwn { startGuideTimer() }
         status = mode.narratesOnItsOwn ? "Смотрю по сторонам" : "Слушаю"
     }
 
     // MARK: Речь
+
+    /// Слова, после которых гид возобновляет рассказ немедленно, не дожидаясь paused-периода.
+    /// Не вопрос вообще, поэтому проверяется раньше счётчика слов и не идёт в answer().
+    private static let resumePhrases = [
+        "продолжи", "продолжай", "продолжи рассказ", "продолжи экскурсию", "давай дальше",
+    ]
 
     /// Пришла законченная фраза. Пока говорим сами — пропускаем: иначе гид услышит себя, посчитает
     /// это вопросом и ответит сам себе.
     private func acceptQuestion(_ text: String) {
         guard !SpeechSynthesizer.shared.isSpeaking, !isBusy else { return }
         let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = GlassesAssistant.normalize(question)
+        if Self.resumePhrases.contains(normalized) {
+            quietUntil = .distantPast
+            return
+        }
         // Одно-два слова — почти всегда обрывок чужой фразы или шум, а не вопрос.
         guard question.split(separator: " ").count >= 2 else { return }
         Task { await answer(question: question) }
@@ -202,7 +222,14 @@ final class LiveSession: ObservableObject {
     private func answer(question: String) async {
         guard !isBusy, let image = frames.latest else { return }
         isBusy = true
-        defer { isBusy = false; status = mode.narratesOnItsOwn ? "Смотрю по сторонам" : "Слушаю" }
+        defer {
+            isBusy = false
+            status = mode.narratesOnItsOwn ? "Смотрю по сторонам" : "Слушаю"
+            // Ответив, гид ненадолго придерживает свой собственный рассказ: 15-секундный интервал
+            // мог истечь прямо посреди разговора, и без этой паузы гид перебил бы уточняющий
+            // вопрос собственной репликой. "Продолжи" (см. acceptQuestion) снимает паузу раньше.
+            quietUntil = Date().addingTimeInterval(Self.postAnswerQuietPeriod)
+        }
 
         entries.append(LiveEntry(kind: .question, text: question, image: nil))
         status = "Думаю…"
@@ -215,17 +242,22 @@ final class LiveSession: ObservableObject {
         await send(prompt: prompt, image: image, kind: .answer)
     }
 
-    private func startGuideTimer() {
-        guideTimer?.invalidate()
-        // Раз в секунду проверяем условия — сама отправка происходит гораздо реже.
-        guideTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.guideTick() }
+    private func startTicker() {
+        ticker?.invalidate()
+        // Раз в секунду проверяем условия и для рассказа гида, и для показа пальцем — сама отправка
+        // происходит гораздо реже.
+        ticker = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.mode.narratesOnItsOwn { await self.guideTick() }
+                await self.pointingTick()
+            }
         }
     }
 
     private func guideTick() async {
         guard isRunning, mode.narratesOnItsOwn, !isBusy,
-              !SpeechSynthesizer.shared.isSpeaking,
+              !SpeechSynthesizer.shared.isSpeaking, Date() >= quietUntil,
               frames.isSteady, let image = frames.latest
         else { return }
         let sinceLastNarration = Date().timeIntervalSince(lastNarration)
@@ -252,6 +284,36 @@ final class LiveSession: ObservableObject {
         prompt += "\n\nЕсли в кадре нет ничего примечательного, ответь ровно одним словом: пропустить"
 
         await send(prompt: prompt, image: image, kind: .narration)
+    }
+
+    /// A finger held up in frame is a question in itself -- see LiveFrameBuffer.isPointing for the
+    /// detector. Edge-triggered, not level-triggered: firing again on every tick while the finger
+    /// stays in view would ask about the same thing on a loop for as long as it's held there.
+    private func pointingTick() async {
+        let pointingNow = frames.isPointing
+        defer { wasPointing = pointingNow }
+        guard isRunning, !isBusy, !SpeechSynthesizer.shared.isSpeaking, Date() >= quietUntil,
+              pointingNow, !wasPointing,
+              Date().timeIntervalSince(lastPointingTrigger) >= Self.pointingCooldown,
+              let image = frames.latest
+        else { return }
+        lastPointingTrigger = Date()
+
+        isBusy = true
+        defer {
+            isBusy = false
+            status = mode.narratesOnItsOwn ? "Смотрю по сторонам" : "Слушаю"
+            quietUntil = Date().addingTimeInterval(Self.postAnswerQuietPeriod)
+        }
+        status = "Вижу палец…"
+        entries.append(LiveEntry(kind: .question, text: "👉 показал пальцем", image: nil))
+
+        let prompt = """
+            Человек указывает пальцем в кадре камеры очков. Назови и коротко опиши именно то, на \
+            что указывает палец, а не всю сцену целиком. Одно-два предложения, разговорно, без \
+            списков и заголовков: ответ читается вслух.
+            """
+        await send(prompt: prompt, image: image, kind: .answer)
     }
 
     private func send(prompt: String, image: UIImage, kind: LiveEntry.Kind) async {

@@ -191,6 +191,27 @@ final class GlassesAssistant: ObservableObject {
             await runWeather(city: hit.argument)
         case .ask:
             await handle(question: hit.argument)
+        case .reminder:
+            await runSchedule(hit.argument, add: ScheduleService.shared.addReminder)
+        case .calendarEvent:
+            await runSchedule(hit.argument, add: ScheduleService.shared.addEvent)
+        }
+    }
+
+    /// Общий путь для напоминания и события: разница только в том, какой метод ScheduleService
+    /// вызвать, а лента, озвучка и обработка ошибки одинаковые.
+    private func runSchedule(_ text: String, add: @escaping (String) async throws -> String) async {
+        status = "Добавляю…"
+        do {
+            let confirmation = try await add(text)
+            ChatSession.shared.append(.init(role: .user, text: text))
+            ChatSession.shared.append(.init(role: .assistant, text: confirmation))
+            ChatSession.shared.persist()
+            speak(confirmation)
+        } catch {
+            let message = error.localizedDescription
+            ChatSession.shared.append(.init(role: .failure, text: message))
+            speak(message)
         }
     }
 

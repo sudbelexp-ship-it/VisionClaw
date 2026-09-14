@@ -61,6 +61,7 @@
 		D83F5A16E02B47C95138AE60 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C70E94B58DA236F0E41B7C8 /* Theme.swift */; };
 		95C08D461EA372B50F49C8D3 /* TranslatorControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B74A9E03568C1FD74E0932A /* TranslatorControl.swift */; };
 		4F82E0A73C591BD6082AF41E /* WeatherService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E607B354D9182FA4C3705B6D /* WeatherService.swift */; };
+		7A9C4E518D63B02F97C1A64D /* ScheduleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D96EF37C482B0A5943E7186 /* ScheduleService.swift */; };
 		A503C8E1742BD69F0E85137C /* HotCommandsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */; };
 		C1E47B203F86A95D7204E8B1 /* HotCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30F9A6D5C82E147B9503D6AF /* HotCommands.swift */; };
 		7E05C9A4318DF26B540A1E93 /* ChatSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */; };
@@ -157,6 +158,7 @@
 		1C70E94B58DA236F0E41B7C8 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		2B74A9E03568C1FD74E0932A /* TranslatorControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslatorControl.swift; sourceTree = "<group>"; };
 		E607B354D9182FA4C3705B6D /* WeatherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeatherService.swift; sourceTree = "<group>"; };
+		1D96EF37C482B0A5943E7186 /* ScheduleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleService.swift; sourceTree = "<group>"; };
 		7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCommandsView.swift; sourceTree = "<group>"; };
 		30F9A6D5C82E147B9503D6AF /* HotCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotCommands.swift; sourceTree = "<group>"; };
 		B3D619F8047C2AE5916BD3C7 /* ChatSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSession.swift; sourceTree = "<group>"; };
@@ -397,6 +399,7 @@
 				5B9D4E128A7F03C6D142E9B8 /* AudioCaptureHub.swift */,
 				2B74A9E03568C1FD74E0932A /* TranslatorControl.swift */,
 				E607B354D9182FA4C3705B6D /* WeatherService.swift */,
+				1D96EF37C482B0A5943E7186 /* ScheduleService.swift */,
 				7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */,
 				30F9A6D5C82E147B9503D6AF /* HotCommands.swift */,
 				0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */,
@@ -593,6 +596,7 @@
 				D83F5A16E02B47C95138AE60 /* Theme.swift in Sources */,
 				95C08D461EA372B50F49C8D3 /* TranslatorControl.swift in Sources */,
 				4F82E0A73C591BD6082AF41E /* WeatherService.swift in Sources */,
+				7A9C4E518D63B02F97C1A64D /* ScheduleService.swift in Sources */,
 				A503C8E1742BD69F0E85137C /* HotCommandsView.swift in Sources */,
 				C1E47B203F86A95D7204E8B1 /* HotCommands.swift in Sources */,
 				7E05C9A4318DF26B540A1E93 /* ChatSession.swift in Sources */,

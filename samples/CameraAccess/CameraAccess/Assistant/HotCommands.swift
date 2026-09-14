@@ -25,6 +25,8 @@ struct HotCommand: Codable, Identifiable, Equatable {
         case translatorOff
         case weather
         case ask
+        case reminder
+        case calendarEvent
 
         var id: String { rawValue }
 
@@ -34,6 +36,8 @@ struct HotCommand: Codable, Identifiable, Equatable {
             case .translatorOff: return "Выключить переводчик"
             case .weather: return "Погода"
             case .ask: return "Спросить модель"
+            case .reminder: return "Напоминание"
+            case .calendarEvent: return "Событие в календаре"
             }
         }
 
@@ -41,7 +45,7 @@ struct HotCommand: Codable, Identifiable, Equatable {
         /// "какая погода" + "в Белгороде" is one command; "включи переводчик" takes nothing.
         var takesArgument: Bool {
             switch self {
-            case .weather, .ask: return true
+            case .weather, .ask, .reminder, .calendarEvent: return true
             case .translatorOn, .translatorOff: return false
             }
         }
@@ -89,6 +93,10 @@ final class HotCommandStore: ObservableObject {
         .init(phrase: "выключи синхронный перевод", action: .translatorOff),
         .init(phrase: "какая сегодня погода", action: .weather),
         .init(phrase: "какая погода", action: .weather),
+        .init(phrase: "напомни", action: .reminder),
+        .init(phrase: "поставь напоминание", action: .reminder),
+        .init(phrase: "добавь в календарь", action: .calendarEvent),
+        .init(phrase: "запланируй", action: .calendarEvent),
     ]
 
     private func save() {

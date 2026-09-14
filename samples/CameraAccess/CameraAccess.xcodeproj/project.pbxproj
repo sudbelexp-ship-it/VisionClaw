@@ -82,6 +82,9 @@
 		D16953355C4912A52FC4ED0A /* SpeechSynthesizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */; };
 		4A2AC56DF179837989B346A9 /* AskAssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1CE65947694AA2B0B86359B /* AskAssistantView.swift */; };
 		7F90C2A44C35C5E053017C8B /* CameraCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BDFC6FC0F4A95C52922C391 /* CameraCaptureView.swift */; };
+		9F1E7C3A2D5B4861A0F3E2C9 /* whisper.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9F1E7C3A2D5B4861A0F3E2C7 /* whisper.xcframework */; };
+		9F1E7C3A2D5B4861A0F3E2CA /* whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 9F1E7C3A2D5B4861A0F3E2C7 /* whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy); }; };
+		9F1E7C3A2D5B4861A0F3E2CB /* WhisperRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F1E7C3A2D5B4861A0F3E2CC /* WhisperRecognizer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +104,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				9F1E7C3A2D5B4861A0F3E2CA /* whisper.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -179,6 +183,8 @@
 		FC877C8210F22F9F6702647A /* SpeechSynthesizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechSynthesizer.swift; sourceTree = "<group>"; };
 		C1CE65947694AA2B0B86359B /* AskAssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAssistantView.swift; sourceTree = "<group>"; };
 		3BDFC6FC0F4A95C52922C391 /* CameraCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureView.swift; sourceTree = "<group>"; };
+		9F1E7C3A2D5B4861A0F3E2C7 /* whisper.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = whisper.xcframework; sourceTree = "<group>"; };
+		9F1E7C3A2D5B4861A0F3E2CC /* WhisperRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperRecognizer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -200,6 +206,7 @@
 				37854B66A92A0817795FABB2 /* MLX in Frameworks */,
 				22504987DB653118519E6A0F /* HuggingFace in Frameworks */,
 				87E82F7D747B87A70009CC1C /* Tokenizers in Frameworks */,
+				9F1E7C3A2D5B4861A0F3E2C9 /* whisper.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -211,6 +218,7 @@
 			children = (
 				8FD96B7D2E6F0A9800F56AB1 /* CameraAccess */,
 				F82D8CACC9D0DAD3791C5A75 /* certs */,
+				9F1E7C3A2D5B4861A0F3E2CD /* Vendor */,
 				8F2A14F12DDBCEB900D4E5F2 /* Frameworks */,
 				7A7A7A7A7A7A7A7A7A7A7A7A /* Products */,
 				E699CC962E8150670052C240 /* CameraAccessTests */,
@@ -373,6 +381,14 @@
 			path = certs;
 			sourceTree = "<group>";
 		};
+		9F1E7C3A2D5B4861A0F3E2CD /* Vendor */ = {
+			isa = PBXGroup;
+			children = (
+				9F1E7C3A2D5B4861A0F3E2C7 /* whisper.xcframework */,
+			);
+			path = Vendor;
+			sourceTree = "<group>";
+		};
 		E6DA451B2E79A63100E3F688 /* MockDeviceKit */ = {
 			isa = PBXGroup;
 			children = (
@@ -403,6 +419,7 @@
 				7D16F0B95E43CA820B9147DE /* HotCommandsView.swift */,
 				30F9A6D5C82E147B9503D6AF /* HotCommands.swift */,
 				0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */,
+				9F1E7C3A2D5B4861A0F3E2CC /* WhisperRecognizer.swift */,
 			);
 			path = Assistant;
 			sourceTree = "<group>";
@@ -615,6 +632,7 @@
 				D16953355C4912A52FC4ED0A /* SpeechSynthesizer.swift in Sources */,
 				4A2AC56DF179837989B346A9 /* AskAssistantView.swift in Sources */,
 				7F90C2A44C35C5E053017C8B /* CameraCaptureView.swift in Sources */,
+				9F1E7C3A2D5B4861A0F3E2CB /* WhisperRecognizer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

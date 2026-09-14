@@ -33,6 +33,15 @@
 // iOS даёт приложению один активный вход: «only one physical input is active at a time». Два
 // AVAudioEngine означали, что второй молча не получал ничего. Модули распознавания читают общий
 // поток буферов — по одному каналу на язык, независимо от того, очки сейчас или телефон.
+//
+// Русский — отдельным путём, через Whisper
+// -----------------------------------------
+// Apple Intelligence поддерживает 16 языков, и русского среди них нет — SpeechTranscriber для него
+// в принципе не устанавливается, это не вопрос повторной попытки. WhisperChannel ниже и
+// WhisperRecognizer.swift решают это целиком в обход Apple: whisper.cpp, открытый и полностью
+// локальный, без списка разрешённых языков. Плата за это тоже настоящая: Whisper не даёт
+// потокового volatile-текста, только готовый кусок после паузы в речи — см. заголовок
+// WhisperRecognizer.swift.
 
 import AVFoundation
 import Foundation
@@ -103,8 +112,92 @@ final class AudioCaptureHub: ObservableObject {
         }
     }
 
+    /// Канал для языков, которых нет у Apple (сейчас — только русский). Whisper не умеет
+    /// потоковый volatile/final контракт Channel выше: он превращает в текст только уже
+    /// законченный кусок звука. Поэтому этот класс сам режет речь по паузе (или по потолку
+    /// длительности — вдруг человек ни разу не замолчит) и отдаёт готовый кусок как единственный
+    /// onFinal; onVolatile для этого канала не срабатывает никогда — честный компромисс,
+    /// подтверждённый пользователем, а не забытая недоделка.
+    private final class WhisperChannel {
+        let locale: Locale
+        /// Whisper ожидает 16 кГц, моно, float32 — независимо от родного формата входа движка.
+        let analysisFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                           channels: 1, interleaved: false)!
+        var listeners: [Listener] = []
+        var converter: AVAudioConverter?
+
+        private static let sampleRate = 16_000.0
+        /// Ниже этой громкости кадр считается тишиной. Не абсолютный порог децибел — Whisper сам
+        /// достаточно устойчив к шуму, это только граница "тут явно никто не говорит".
+        private static let silenceAmplitude: Float = 0.01
+        /// Пауза такой длины считается концом фразы и обрезает кусок.
+        private static let silenceToCut = Int(0.6 * sampleRate)
+        /// Потолок на случай, если говорящий вообще не делает пауз — тот же приём, что и в
+        /// Android-версии этого приложения (там резалось по 4 секундам через TranslationAudioBlocks).
+        private static let maxChunkFrames = Int(12 * sampleRate)
+        /// Не резать по паузе, пока не накопилось хотя бы это — иначе тишина между фразами сама
+        /// по себе гоняла бы Whisper вхолостую каждые 0.6 секунды.
+        private static let minFramesBeforeCut = Int(0.3 * sampleRate)
+
+        private let recognizer: WhisperRecognizer
+        private let queue = DispatchQueue(label: "whisper.recognizer", qos: .userInitiated)
+        private var pending: [Float] = []
+        private var silentFrames = 0
+
+        init(locale: Locale, recognizer: WhisperRecognizer) {
+            self.locale = locale
+            self.recognizer = recognizer
+        }
+
+        /// buffer уже приведён к analysisFormat вызывающей стороной (см. dispatch в AudioCaptureHub).
+        func feed(_ buffer: AVAudioPCMBuffer) {
+            guard let channelData = buffer.floatChannelData?[0] else { return }
+            let frameCount = Int(buffer.frameLength)
+            guard frameCount > 0 else { return }
+            pending.append(contentsOf: UnsafeBufferPointer(start: channelData, count: frameCount))
+
+            var isSilent = true
+            for i in 0..<frameCount where abs(channelData[i]) > Self.silenceAmplitude {
+                isSilent = false
+                break
+            }
+            silentFrames = isSilent ? silentFrames + frameCount : 0
+
+            let readyToCutOnPause = silentFrames >= Self.silenceToCut && pending.count >= Self.minFramesBeforeCut
+            if readyToCutOnPause || pending.count >= Self.maxChunkFrames {
+                flush()
+            }
+        }
+
+        private func flush() {
+            guard !pending.isEmpty else { return }
+            let samples = pending
+            pending = []
+            silentFrames = 0
+            // Ничего, кроме тишины, — не стоит будить Whisper ради пустого результата.
+            guard samples.contains(where: { abs($0) > Self.silenceAmplitude }) else { return }
+
+            let language = String(locale.identifier.prefix(2))
+            let currentListeners = listeners
+            let recognizer = recognizer
+            queue.async {
+                let text = recognizer.transcribe(samples: samples, languageCode: language)
+                guard !text.isEmpty else { return }
+                Task { @MainActor in
+                    for listener in currentListeners { listener.onFinal(text) }
+                }
+            }
+        }
+    }
+
     private let engine = AVAudioEngine()
     private var channels: [Channel] = []
+    /// Русский идёт мимо Apple целиком (см. ensureLanguageModel и WhisperChannel ниже) — свой,
+    /// отдельный набор каналов, не связанный с SpeechAnalyzer/SpeechTranscriber ни в чём.
+    private var whisperChannels: [WhisperChannel] = []
+    /// Загруженная модель Whisper держится в памяти между стартами/остановками движка — заново
+    /// читать файл модели с диска при каждой временной приостановке ради чужого аудио незачем.
+    private var whisperRecognizer: WhisperRecognizer?
     private var routeObserver: NSObjectProtocol?
     private var interruptionObserver: NSObjectProtocol?
     private var otherAudioTimer: Timer?
@@ -131,6 +224,21 @@ final class AudioCaptureHub: ObservableObject {
         if !isRunning {
             try startEngine()
         }
+        if Self.isWhisperLocale(resolved) {
+            // Тот же принцип "один язык — один канал", только по свою сторону: русский никогда
+            // не делит канал с Apple-путём и наоборот.
+            if let existing = whisperChannels.first(where: { $0.locale.identifier == resolved.identifier }) {
+                existing.listeners.append(listener)
+            } else {
+                guard let recognizer = whisperRecognizer else {
+                    throw HubError.assetNotInstalled(resolved.identifier)
+                }
+                let channel = WhisperChannel(locale: resolved, recognizer: recognizer)
+                channel.listeners.append(listener)
+                whisperChannels.append(channel)
+            }
+            return listener
+        }
         // Один язык — один канал: эфир и фраза-триггер слушают одно и то же и не должны
         // резервировать языковую модель дважды.
         if let existing = channels.first(where: { $0.locale.identifier == resolved.identifier }) {
@@ -148,11 +256,15 @@ final class AudioCaptureHub: ObservableObject {
         for channel in channels {
             channel.listeners.removeAll { $0.id == listener.id }
         }
+        for channel in whisperChannels {
+            channel.listeners.removeAll { $0.id == listener.id }
+        }
         // Канал без слушателей закрывается: языковая модель — ограниченный ресурс, держать её
         // занятой «на всякий случай» мешает другому языку получить свою.
         for channel in channels where channel.listeners.isEmpty { close(channel) }
         channels.removeAll { $0.listeners.isEmpty }
-        if channels.isEmpty { stopEngine() }
+        whisperChannels.removeAll { $0.listeners.isEmpty }
+        if channels.isEmpty && whisperChannels.isEmpty { stopEngine() }
     }
 
     // MARK: Языковая модель
@@ -172,6 +284,14 @@ final class AudioCaptureHub: ObservableObject {
     /// совпадающий вариант вместо этого.
     @discardableResult
     func ensureLanguageModel(for locale: Locale) async throws -> Locale {
+        // Русский не входит в 16 языков Apple Intelligence, и SpeechTranscriber для него в принципе
+        // не ставится — это не тот случай, который supportedLocale(equivalentTo:) ниже может
+        // разрешить. Whisper подключается отдельным путём целиком, ещё до обращения к Apple.
+        // См. заголовок WhisperRecognizer.swift.
+        if Self.isWhisperLocale(locale) {
+            try await ensureWhisperModel()
+            return locale
+        }
         guard let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
             throw HubError.unsupportedLanguage(locale.identifier)
         }
@@ -199,6 +319,55 @@ final class AudioCaptureHub: ObservableObject {
             throw HubError.assetNotInstalled(resolved.identifier)
         }
         return resolved
+    }
+
+    /// Русский и только русский — единственный язык, который Apple Intelligence не поддерживает
+    /// из тех, что реально нужны в этом приложении. Отдельный флаг, а не "пробуем Apple, ловим
+    /// ошибку, откатываемся на Whisper": так решение видно сразу, не после неудачной попытки.
+    private static func isWhisperLocale(_ locale: Locale) -> Bool {
+        locale.identifier.lowercased().hasPrefix("ru")
+    }
+
+    private static let whisperModelFileName = "ggml-base.bin"
+    /// Официальный релиз ggml-org, а не сторонний слепок — та же организация, что публикует сам
+    /// whisper.xcframework в Vendor/. base — компромисс между размером (142 МБ) и качеством;
+    /// small (466 МБ) точнее, но качать его без явного запроса пользователя не стоит.
+    private static let whisperModelURL = URL(
+        string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin")!
+
+    private static var whisperModelPath: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("whisper", isDirectory: true)
+            .appendingPathComponent(whisperModelFileName)
+    }
+
+    /// Скачивает модель Whisper при необходимости и держит загруженный распознаватель в памяти.
+    /// Как и Apple-путь выше, вызывается и из addListener, и напрямую кнопкой в настройках — модель
+    /// должна быть готова заранее, а не всплывать сюрпризом посреди разговора.
+    private func ensureWhisperModel() async throws {
+        if whisperRecognizer != nil { return }
+        let path = Self.whisperModelPath
+        if !FileManager.default.fileExists(atPath: path.path) {
+            isPreparingModel = true
+            defer { isPreparingModel = false }
+            try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            let (tempURL, response) = try await URLSession.shared.download(from: Self.whisperModelURL)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                throw HubError.assetNotInstalled("ru")
+            }
+            // Перемещаем атомарно, чтобы недокачанный файл никогда не сошёл за готовую модель,
+            // если приложение прервётся ровно между скачиванием и следующим запуском.
+            try? FileManager.default.removeItem(at: path)
+            try FileManager.default.moveItem(at: tempURL, to: path)
+        }
+        guard let recognizer = WhisperRecognizer(modelPath: path.path) else {
+            // Модель скачалась, но не загрузилась — то есть файл битый или неполный, а не
+            // "языка нет". Убираем его, чтобы следующая попытка качала заново, а не читала брак.
+            try? FileManager.default.removeItem(at: path)
+            throw HubError.assetNotInstalled("ru")
+        }
+        whisperRecognizer = recognizer
     }
 
     // MARK: Канал распознавания
@@ -357,6 +526,14 @@ final class AudioCaptureHub: ObservableObject {
                 listener.onLevel?(rms, seconds)
             }
         }
+        for channel in whisperChannels {
+            guard let converted = Self.convert(buffer, to: channel.analysisFormat,
+                                               using: &channel.converter) else { continue }
+            channel.feed(converted)
+            for listener in channel.listeners {
+                listener.onLevel?(rms, seconds)
+            }
+        }
     }
 
     private static func convert(_ buffer: AVAudioPCMBuffer,
@@ -449,7 +626,7 @@ final class AudioCaptureHub: ObservableObject {
     }
 
     private func reconcileWithOtherAudio() {
-        guard !channels.isEmpty else { return }
+        guard !channels.isEmpty || !whisperChannels.isEmpty else { return }
         let othersPlaying = AVAudioSession.sharedInstance().isOtherAudioPlaying
         if othersPlaying, !isSuspended {
             suspend()
@@ -471,7 +648,7 @@ final class AudioCaptureHub: ObservableObject {
     }
 
     private func resume() {
-        guard isSuspended, !channels.isEmpty else { return }
+        guard isSuspended, !channels.isEmpty || !whisperChannels.isEmpty else { return }
         do {
             try startEngine()
         } catch {
@@ -547,7 +724,7 @@ final class AudioCaptureHub: ObservableObject {
                 return "Распознавание \(id) на этом телефоне недоступно."
             case .assetNotInstalled(let id):
                 return "Не удалось установить языковую модель \(id). Попробуйте ещё раз позже — "
-                    + "иногда сервер Apple временно не отдаёт пакет для этого языка."
+                    + "иногда сервер временно не отдаёт пакет для этого языка."
             }
         }
     }

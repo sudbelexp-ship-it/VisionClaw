@@ -1,4 +1,8 @@
 *.xcframework/
+# Vendored on purpose: official ggml-org/whisper.cpp release asset, checksum verified by hand
+# before committing (see AudioCaptureHub.swift's header for why it's here instead of via SPM).
+!Vendor/whisper.xcframework/
+!Vendor/whisper.xcframework/**
 .DS_Store
 xcuserdata/
 

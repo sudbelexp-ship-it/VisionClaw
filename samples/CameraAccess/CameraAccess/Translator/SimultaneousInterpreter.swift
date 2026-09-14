@@ -45,13 +45,25 @@ final class InterpreterVoice {
     private var outputFormat: AVAudioFormat?
     private var usesEngine = false
 
-    /// Attach to the shared engine. Safe whether or not it is already running: the node is
-    /// connected with the mixer's own format, so no reconfiguration is needed.
+    /// Attach to the shared engine. Idempotent -- start()/stop() cycles call this again on the
+    /// same engine without re-attaching -- and safe even while the engine is already recording,
+    /// which it usually is by the time this runs: the assistant's own listener keeps it running in
+    /// the background. Apple documents attach/connect as fine on a live engine, but reconfiguring
+    /// the graph while it's rendering has a real history of silently disturbing an already-installed
+    /// input tap -- which would explain "hears nothing, no error anywhere" better than anything
+    /// else in this file. Pausing around the mutation and restarting afterward is the
+    /// documented-safe way to change a running engine's graph.
     func attach(to engine: AVAudioEngine) {
+        guard !engine.attachedNodes.contains(player) else { return }
         let format = engine.mainMixerNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return }
+        let wasRunning = engine.isRunning
+        if wasRunning { engine.pause() }
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
+        if wasRunning {
+            try? engine.start()
+        }
         outputFormat = format
         usesEngine = true
     }

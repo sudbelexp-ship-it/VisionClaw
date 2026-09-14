@@ -108,6 +108,18 @@ final class GlassesAssistant: ObservableObject {
         }
     }
 
+    /// Re-applies the wake phrase to an already-running listener.
+    ///
+    /// start() alone won't do this: it guards on `!isListening` and is a no-op while already
+    /// listening — exactly the state the toggle is in whenever someone edits the phrase field
+    /// without switching it off first. Without this, the field's new text sat in UserDefaults doing
+    /// nothing until the toggle was flipped off and back on by hand.
+    func applyPhraseChange() async {
+        guard isListening else { return }
+        stop()
+        await start()
+    }
+
     // MARK: Trigger
 
     /// Look for the phrase and take everything after it as the question.

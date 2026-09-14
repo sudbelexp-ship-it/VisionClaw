@@ -80,6 +80,13 @@ final class LiveSession: ObservableObject {
     /// Не чаще одного рассказа в 15 секунд, и только если сцена сменилась. Подобрано под музей:
     /// подошёл к экспонату, остановился — услышал; стоишь на месте — молчит.
     var narrationInterval: TimeInterval = 15
+    /// Если смена сцены так и не обнаружена, гид всё равно пробует раз в столько секунд, а не
+    /// молчит бесконечно. LiveFrameBuffer сравнивает яркость 32x32-отпечатка: в тёмной комнате
+    /// или перед почти однотонным фоном эта разница может не превысить порог даже когда предмет
+    /// перед камерой на самом деле другой — отличить "то же самое" от "просто темно" по одной
+    /// яркости нельзя. Повтор одного и того же прикрывает сам промпт (список "уже рассказано" и
+    /// слово "пропустить"), а не пиксельная эвристика.
+    private static let forcedNarrationInterval: TimeInterval = 45
 
     private weak var streamViewModel: StreamSessionViewModel?
     private var listener: AudioCaptureHub.Listener?
@@ -105,14 +112,19 @@ final class LiveSession: ObservableObject {
         }
 
         status = "Запускаю камеру очков…"
-        if !streamViewModel.isStreaming {
+        // .streaming specifically, not the looser isStreaming (`!= .stopped`, true for `.waiting`
+        // too): `.waiting` is the state right after session.start() is called, well before `camera`
+        // exists and frames start arriving. Gating on the loose check let onDecodedFrame get wired
+        // up before there was anything to decode, which is indistinguishable from "camera never
+        // came up" from here -- same race GlassesCamera.singleFrame had for photo capture.
+        if streamViewModel.streamingStatus != .streaming {
             await streamViewModel.handleStartStreaming()
             for _ in 0..<40 {
-                if streamViewModel.isStreaming { break }
+                if streamViewModel.streamingStatus == .streaming { break }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
-        guard streamViewModel.isStreaming else {
+        guard streamViewModel.streamingStatus == .streaming else {
             errorText = "Не удалось запустить камеру очков. Они включены и разложены?"
             status = nil
             return
@@ -214,9 +226,11 @@ final class LiveSession: ObservableObject {
     private func guideTick() async {
         guard isRunning, mode.narratesOnItsOwn, !isBusy,
               !SpeechSynthesizer.shared.isSpeaking,
-              Date().timeIntervalSince(lastNarration) >= narrationInterval,
-              frames.isSteady, frames.hasChangedSinceSent,
-              let image = frames.latest
+              frames.isSteady, let image = frames.latest
+        else { return }
+        let sinceLastNarration = Date().timeIntervalSince(lastNarration)
+        guard sinceLastNarration >= narrationInterval else { return }
+        guard frames.hasChangedSinceSent || sinceLastNarration >= Self.forcedNarrationInterval
         else { return }
 
         isBusy = true

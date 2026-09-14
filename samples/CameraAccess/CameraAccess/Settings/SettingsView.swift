@@ -38,7 +38,6 @@ struct SettingsView: View {
             }
             .navigationTitle("Настройки")
             .onChange(of: assistantEnabled) { _, _ in Task { await assistant.refresh() } }
-            .onChange(of: assistantPhrase) { _, _ in Task { await assistant.refresh() } }
             .alert("Сбросить настройки?", isPresented: $showResetConfirmation) {
                 Button("Сбросить", role: .destructive) { settings.resetAll() }
                 Button("Отмена", role: .cancel) {}
@@ -107,6 +106,11 @@ struct SettingsView: View {
                         .multilineTextAlignment(.trailing)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
+                }
+                Button {
+                    Task { await assistant.applyPhraseChange() }
+                } label: {
+                    SettingsRow(icon: "checkmark.circle.fill", tint: .green, title: "Применить фразу")
                 }
                 NavigationLink {
                     HotCommandsView()

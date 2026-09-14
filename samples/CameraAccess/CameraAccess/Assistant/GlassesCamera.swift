@@ -21,15 +21,20 @@ enum GlassesCamera {
 
     @MainActor
     static func singleFrame(from viewModel: StreamSessionViewModel) async -> UIImage? {
-        let wasStreaming = viewModel.isStreaming
+        // isStreaming is `streamingStatus != .stopped`, which is also true for `.waiting` -- the
+        // state right after session.start() is called, well before `camera` actually exists. Gating
+        // on that let this fall through to capturePhoto() on a nil camera almost immediately,
+        // silently capturing nothing while looking like it had succeeded fast. Only `.streaming`
+        // means frames -- and a working camera to ask for a photo -- are actually there.
+        let wasStreaming = viewModel.streamingStatus == .streaming
         if !wasStreaming {
             await viewModel.handleStartStreaming()
             for _ in 0..<streamTimeoutTicks {
-                if viewModel.isStreaming { break }
+                if viewModel.streamingStatus == .streaming { break }
                 try? await Task.sleep(nanoseconds: tick)
             }
         }
-        guard viewModel.isStreaming else { return nil }
+        guard viewModel.streamingStatus == .streaming else { return nil }
 
         // Clear first: a photo left over from a previous capture would be returned instantly as
         // if it were the new one, which is how "it answered about the wrong thing" happens.

@@ -10,6 +10,12 @@ struct LiveView: View {
     @StateObject private var live = LiveSession.shared
     @StateObject private var frames = LiveSession.shared.frames
     @StateObject private var synth = SpeechSynthesizer.shared
+    // То же хранилище, что читает LiveSession.send() при выборе бэкенда -- эфир обрабатывает
+    // ровно тот движок, что выбран в Настройках, никакого отдельного выбора для эфира нет.
+    @AppStorage(IntelligenceEngine.defaultsKey) private var intelligenceRaw = IntelligenceEngine.gigachat.rawValue
+    private var activeEngine: IntelligenceEngine {
+        IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat
+    }
 
     var body: some View {
         NavigationStack {
@@ -101,6 +107,11 @@ struct LiveView: View {
             Text(live.mode.blurb)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Label("Смотрит: \(activeEngine.label)", systemImage: "eye")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let error = live.errorText {

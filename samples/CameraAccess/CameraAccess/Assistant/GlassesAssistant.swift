@@ -5,13 +5,11 @@
 // photos. Everything it does lands in the same ChatSession the screen shows, so a question asked
 // while walking is in the thread when you next look at the phone.
 //
-// On the microphone. The glasses' own array is beamformed onto the wearer and would hear a spoken
-// command better than the phone does -- but iOS only reaches it over Bluetooth HFP, and selecting
-// an HFP input drags playback onto the same link, so everything the user hears drops to call
-// quality for as long as the assistant listens. Since it listens all day, that would mean
-// call-quality audio all day. Capture therefore goes through AudioCaptureHub on the phone's own
-// microphone, which also lets this run alongside the interpreter instead of fighting it for the
-// single input iOS allows an app.
+// On the microphone: this listens through AudioCaptureHub, which defaults to the glasses'
+// Bluetooth HFP mic for every listener (assistant, translator, live, chat dictation) and only
+// falls back to the phone mic when the glasses aren't connected. The hub releases the mic solely
+// while the phone itself is playing music, video or a voice message -- see AudioCaptureHub.swift
+// for why. Nothing here needs to know which physical mic is in use.
 //
 // Listening never stops while the assistant is on, including with the app in the background --
 // the app already declares the `audio` background mode for exactly this. Recognition runs

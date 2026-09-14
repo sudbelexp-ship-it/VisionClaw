@@ -16,12 +16,23 @@
 // фраз приходилось вычислять самим по громкости и индексам в транскрипте; теперь её проводит сама
 // модель, а вместе с индексами исчезает целый класс ошибок рассинхронизации.
 //
+// Микрофон: очки как правило, телефон как запасной вариант
+// ----------------------------------------------------------
+// Правило одно и то же для всех — ассистента, чата, эфира, переводчика: микрофон очков (пятимикрофонный
+// массив, направленный на носителя) слышит лучше, чем телефон в кармане или на столе, поэтому он и
+// используется всегда, пока очки подключены по Bluetooth. Никакого выбора «по фразе» или «пока сами
+// не говорим» здесь нет — такой была более ранняя, ошибочная версия этого файла, где вход
+// переключался по признаку isSpeaking; пользователь прямо поправил: единственное, что должно
+// освобождать микрофон, — это когда сам ТЕЛЕФОН воспроизводит музыку, видео или голосовое
+// сообщение, а во всё остальное время микрофон включён. Этим уже занимается механизм ниже
+// (observeOtherAudio/suspend/resume), построенный раньше по другому поводу (не мешать чужим
+// приложениям) — он же оказался ровно тем самым переключателем.
+//
 // Один вход на всех
 // -----------------
 // iOS даёт приложению один активный вход: «only one physical input is active at a time». Два
-// AVAudioEngine означали, что второй молча не получал ничего. Захват всегда с микрофона телефона,
-// воспроизведение всегда остаётся на A2DP в полном качестве, а модули распознавания читают общий
-// поток буферов — по одному каналу на язык.
+// AVAudioEngine означали, что второй молча не получал ничего. Модули распознавания читают общий
+// поток буферов — по одному каналу на язык, независимо от того, очки сейчас или телефон.
 
 import AVFoundation
 import Foundation
@@ -34,44 +45,14 @@ final class AudioCaptureHub: ObservableObject {
 
     @Published private(set) var outputRouteName = ""
     @Published private(set) var isRunning = false
-    /// Микрофон отдан системе, потому что звук занят другим приложением.
+    /// Микрофон отдан системе, потому что звук занят другим приложением (или самим телефоном —
+    /// музыка, видео, голосовое сообщение).
     @Published private(set) var isSuspended = false
     /// Языковая модель скачивается — первый запуск на новом языке требует сети.
     @Published private(set) var isPreparingModel = false
-    /// Сейчас реально слушаем через микрофон очков (а не телефона).
+    /// Сейчас реально слушаем через микрофон очков, а не телефона. Только для индикации в
+    /// интерфейсе — на решение о том, кого слушать, не влияет.
     @Published private(set) var isUsingGlassesMic = false
-
-    /// Слушать через микрофон очков, пока сами молчим, вместо микрофона телефона.
-    ///
-    /// Идея не наша: так устроена гарнитура — пока играет звук («режим наушников»), микрофоны
-    /// выключены и звук идёт в полном качестве; как только звук замолкает («режим гарнитуры»),
-    /// микрофоны включаются, а качество падает. Это тот же физический факт, что A2DP и HFP
-    /// взаимоисключающие (подтверждено форумом Apple), просто здесь мы ПЕРЕКЛЮЧАЕМСЯ между ними
-    /// по состоянию, а не выбираем один раз навсегда, как раньше.
-    ///
-    /// Пока мы сами не говорим, микрофон очков (пятимикрофонный массив, направленный на носителя)
-    /// слышит и вопрос, и собеседника лучше телефона в кармане. Касается всех: ассистента, чата,
-    /// эфира и переводчика тоже — по прямому решению пользователя переводчик специально не
-    /// исключён. Это делает его поочерёдным, а не действительно одновременным: пока в ухе звучит
-    /// перевод, микрофон выключен (полное качество звука) и то, что говорит собеседник в этот
-    /// момент, не расслышано; как только перевод заканчивается, микрофон очков включается и
-    /// слушает дальше. Тот же ритм, что у обычного переводчика-гаджета.
-    ///
-    /// Выключено по умолчанию: переключение профиля Bluetooth — не бесплатная операция (заметная
-    /// на слух пауза при каждом переключении, лишний расход батареи), и как быстро это происходит
-    /// на конкретных очках — известно только на реальном устройстве. Пока настройка выключена,
-    /// поведение везде прежнее, включая переводчик.
-    static let preferGlassesMicKey = "preferGlassesMicWhenIdle"
-    var preferGlassesMicWhenIdle: Bool {
-        get { UserDefaults.standard.bool(forKey: Self.preferGlassesMicKey) }
-        set { UserDefaults.standard.set(newValue, forKey: Self.preferGlassesMicKey) }
-    }
-    /// Слушатели, которым нужен именно телефон независимо от настройки выше. Сейчас таких нет —
-    /// оставлено как общая инфраструктура на случай будущего режима, которому действительно
-    /// понадобится непрерывный вход поверх собственного воспроизведения. Считаем количество, а не
-    /// bool: несколько таких слушателей могут жить одновременно, и последний уходящий не должен
-    /// снимать запрет для тех, кто остался.
-    private var phoneOnlyListenerCount = 0
 
     /// Один слушатель: язык плюс то, что он хочет получать.
     ///
@@ -81,11 +62,6 @@ final class AudioCaptureHub: ObservableObject {
     final class Listener {
         let id = UUID()
         let locale: Locale
-        /// Требует именно микрофон телефона, даже если включена настройка «слушать очками, пока
-        /// молчим». У синхронного переводчика есть повод слушать непрерывно, включая момент,
-        /// когда мы сами читаем перевод вслух, — переключение на очки как раз тогда отключило бы
-        /// микрофон.
-        let requiresPhoneMic: Bool
         /// Закреплённый кусок речи. Приходит один раз и больше не меняется.
         let onFinal: (String) -> Void
         /// Черновой хвост: текст, который модель ещё может переписать. Показывать можно,
@@ -95,12 +71,10 @@ final class AudioCaptureHub: ObservableObject {
         let onLevel: ((Float, Double) -> Void)?
 
         init(locale: Locale,
-             requiresPhoneMic: Bool = false,
              onFinal: @escaping (String) -> Void,
              onVolatile: ((String) -> Void)? = nil,
              onLevel: ((Float, Double) -> Void)? = nil) {
             self.locale = locale
-            self.requiresPhoneMic = requiresPhoneMic
             self.onFinal = onFinal
             self.onVolatile = onVolatile
             self.onLevel = onLevel
@@ -142,7 +116,6 @@ final class AudioCaptureHub: ObservableObject {
 
     @discardableResult
     func addListener(locale: Locale,
-                     requiresPhoneMic: Bool = false,
                      onFinal: @escaping (String) -> Void,
                      onVolatile: ((String) -> Void)? = nil,
                      onLevel: ((Float, Double) -> Void)? = nil) async throws -> Listener {
@@ -153,9 +126,8 @@ final class AudioCaptureHub: ObservableObject {
         // и подбирает совпадающий вариант (например, другой региональный код) вместо этого.
         let resolved = try await ensureLanguageModel(for: locale)
 
-        let listener = Listener(locale: resolved, requiresPhoneMic: requiresPhoneMic,
-                                onFinal: onFinal, onVolatile: onVolatile, onLevel: onLevel)
-        if requiresPhoneMic { phoneOnlyListenerCount += 1 }
+        let listener = Listener(locale: resolved, onFinal: onFinal,
+                                onVolatile: onVolatile, onLevel: onLevel)
         if !isRunning {
             try startEngine()
         }
@@ -168,15 +140,11 @@ final class AudioCaptureHub: ObservableObject {
             channel.listeners.append(listener)
             channels.append(channel)
         }
-        // Новый слушатель мог сам потребовать телефон — пересчитать маршрут сразу, не дожидаясь
-        // очередного тика таймера, иначе первая же секунда переводчика слушала бы очки.
-        reconcileMicRoute()
         return listener
     }
 
     func removeListener(_ listener: Listener?) {
         guard let listener else { return }
-        if listener.requiresPhoneMic { phoneOnlyListenerCount = max(0, phoneOnlyListenerCount - 1) }
         for channel in channels {
             channel.listeners.removeAll { $0.id == listener.id }
         }
@@ -184,11 +152,7 @@ final class AudioCaptureHub: ObservableObject {
         // занятой «на всякий случай» мешает другому языку получить свою.
         for channel in channels where channel.listeners.isEmpty { close(channel) }
         channels.removeAll { $0.listeners.isEmpty }
-        if channels.isEmpty {
-            stopEngine()
-        } else {
-            reconcileMicRoute()
-        }
+        if channels.isEmpty { stopEngine() }
     }
 
     // MARK: Языковая модель
@@ -299,16 +263,15 @@ final class AudioCaptureHub: ObservableObject {
 
     private func startEngine() throws {
         let session = AVAudioSession.sharedInstance()
-        // Без .defaultToSpeaker: он прибивает вывод к встроенному динамику на всю категорию и
-        // перебивает очки. Без .allowBluetooth: HFP отдал бы нам микрофон гарнитуры и утащил бы
-        // туда же воспроизведение. .mixWithOthers — сессия открыта весь день, приглушать чужое
-        // всё это время незачем.
+        // .allowBluetooth — доступ к микрофону очков (HFP), предпочитаемому входу, см.
+        // applyPreferredInput(). Без .defaultToSpeaker: он прибил бы вывод к встроенному динамику
+        // на всю категорию и перебил бы очки. .mixWithOthers — сессия открыта весь день; приглушать
+        // чужой звук незачем, за освобождение микрофона на время чужого воспроизведения отвечает
+        // отдельный, более грубый механизм ниже (suspend/resume), а не приглушение громкости.
         try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.mixWithOthers, .allowBluetoothA2DP])
+                                options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
-        if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-            try? session.setPreferredInput(builtIn)
-        }
+        applyPreferredInput()
         applyOutputRoute()
         observeRouteChanges()
         observeOtherAudio()
@@ -320,12 +283,25 @@ final class AudioCaptureHub: ObservableObject {
         try engine.start()
         isRunning = true
         isSuspended = false
-        isUsingGlassesMic = false
+    }
+
+    /// Микрофон очков — предпочтение по умолчанию, микрофон телефона — запасной вариант, если
+    /// очки сейчас не подключены по Bluetooth. См. заголовок файла: единого решения «на каждую
+    /// фразу» здесь больше нет, только это.
+    private func applyPreferredInput() {
+        let session = AVAudioSession.sharedInstance()
+        if let glasses = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
+            try? session.setPreferredInput(glasses)
+        } else if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtIn)
+        }
+        isUsingGlassesMic = session.currentRoute.inputs.first?.portType == .bluetoothHFP
     }
 
     /// Ставит тап на текущий вход движка с заданным форматом. Отдельный метод, а не только код
-    /// внутри startEngine: переключение микрофона очки/телефон меняет родной формат входа и
-    /// требует снять тап и поставить заново, не трогая остальной движок или каналы распознавания.
+    /// внутри startEngine: подключение или отключение очков посреди сеанса меняет родной формат
+    /// входа и требует снять тап и поставить заново, не трогая остальной движок или каналы
+    /// распознавания — см. handleRouteChange.
     private func installTap(format: AVAudioFormat) {
         let input = engine.inputNode
         input.removeTap(onBus: 0)
@@ -440,15 +416,22 @@ final class AudioCaptureHub: ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    // MARK: Уступить микрофон чужому звуку
+    // MARK: Уступить микрофон чужому звуку (и своему собственному воспроизведению)
 
     /// Отдать микрофон, пока играет что-то другое, и забрать обратно потом.
     ///
-    /// Две причины, и первая неочевидна. A2DP односторонний и не может нести звук в обе стороны,
-    /// поэтому на многих устройствах ЛЮБОЙ активный вход роняет Bluetooth до HFP 8 кГц — музыка,
-    /// подкаст или звонок звучали бы в телефонном качестве всё время, пока приложение слушает.
-    /// Вторая проще: под музыку распознаватель транскрибирует слова песни, и рано или поздно
-    /// строчка совпадёт с командой.
+    /// Это единственное условие, при котором микрофон должен выключаться — по прямому уточнению
+    /// пользователя: слушаем всегда, кроме тех случаев, когда сам телефон воспроизводит музыку,
+    /// видео или голосовое сообщение. isOtherAudioPlaying и есть проверка именно на это: собственная
+    /// синтезированная речь приложения (ответ ассистента, перевод) идёт в той же аудиосессии и в
+    /// это значение не попадает — только звук из СТОРОННИХ приложений (или другой сессии внутри
+    /// системы) считается «другим звуком».
+    ///
+    /// Причины отдавать микрофон, а не просто игнорировать буферы, тоже две. Первая неочевидна:
+    /// A2DP односторонний и не может нести звук в обе стороны, поэтому на многих устройствах ЛЮБОЙ
+    /// активный вход роняет Bluetooth до HFP 8 кГц — музыка или подкаст звучали бы в телефонном
+    /// качестве всё время, пока приложение слушает. Вторая проще: под музыку распознаватель
+    /// транскрибирует слова песни, и рано или поздно строчка совпадёт с командой.
     private func observeOtherAudio() {
         guard otherAudioTimer == nil else { return }
         otherAudioTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -473,66 +456,6 @@ final class AudioCaptureHub: ObservableObject {
         } else if !othersPlaying, isSuspended {
             resume()
         }
-        reconcileMicRoute()
-    }
-
-    // MARK: Микрофон очков вместо телефона, пока сами молчим
-
-    /// Переключить вход между телефоном и очками — см. preferGlassesMicWhenIdle. Слушать очками,
-    /// только если: настройка включена, ни один активный слушатель не потребовал именно телефон
-    /// (сейчас таких нет — см. phoneOnlyListenerCount), и сами сейчас не говорим. Последнее — не «не обрабатывать буферы
-    /// с очков, пока говорим», а именно ОТПУСТИТЬ Bluetooth-вход: сам факт активного входа держит
-    /// связь в режиме HFP независимо от того, что мы делаем с приходящими буферами, а нам ровно в
-    /// этот момент и нужно полное качество звука для собственной речи.
-    private func reconcileMicRoute() {
-        guard isRunning, !isSuspended, !channels.isEmpty else { return }
-        let wantsGlasses = preferGlassesMicWhenIdle
-            && phoneOnlyListenerCount == 0
-            && !SpeechSynthesizer.shared.isSpeaking
-        guard wantsGlasses != isUsingGlassesMic else { return }
-
-        let session = AVAudioSession.sharedInstance()
-        if wantsGlasses {
-            guard let glassesInput = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) else {
-                // Очки сейчас не в паре по Bluetooth — переключать не на что. Не ошибка: они
-                // могут появиться на следующем тике, если человек их наденет или включит.
-                return
-            }
-            switchInput(to: glassesInput,
-                       options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP],
-                       isGlasses: true)
-        } else if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-            switchInput(to: builtIn, options: [.mixWithOthers, .allowBluetoothA2DP], isGlasses: false)
-        }
-    }
-
-    /// Переключить вход с коротким рестартом движка. Смена Bluetooth-профиля меняет родной формат
-    /// микрофона (у HFP это, как правило, 8 кГц моно — заметно ниже, чем у телефона), а
-    /// AVAudioEngine не переживает смену формата входа на лету: тап нужно снять и поставить заново
-    /// на новый формат. Каналов распознавания это не задевает — у каждого свой конвертер,
-    /// приводящий произвольный вход к однажды выбранному формату анализа.
-    private func switchInput(to port: AVAudioSessionPortDescription,
-                             options: AVAudioSession.CategoryOptions, isGlasses: Bool) {
-        let session = AVAudioSession.sharedInstance()
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        do {
-            try session.setCategory(.playAndRecord, mode: .default, options: options)
-            try session.setPreferredInput(port)
-            let format = engine.inputNode.inputFormat(forBus: 0)
-            guard format.sampleRate > 0 else {
-                NSLog("[VisionClaw] переключение микрофона дало пустой формат, остаюсь на прежнем")
-                try? engine.start()
-                return
-            }
-            installTap(format: format)
-            try engine.start()
-            isUsingGlassesMic = isGlasses
-            applyOutputRoute()
-        } catch {
-            NSLog("[VisionClaw] не удалось переключить микрофон: %@", "\(error)")
-            try? engine.start()
-        }
     }
 
     /// Приостановка снимает только подачу аудио. Каналы остаются живыми: пересоздавать их значило
@@ -543,6 +466,7 @@ final class AudioCaptureHub: ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         isRunning = false
         isSuspended = true
+        isUsingGlassesMic = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -578,8 +502,33 @@ final class AudioCaptureHub: ObservableObject {
         routeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.applyOutputRoute() }
+            Task { @MainActor in self?.handleRouteChange() }
         }
+    }
+
+    /// Очки подключились или отключились посреди сеанса. Переоценивает предпочитаемый вход и,
+    /// если он реально сменился, переустанавливает тап на новый формат: профили Bluetooth несут
+    /// разный родной формат микрофона (у HFP это, как правило, 8 кГц против куда большей частоты
+    /// у телефона), а AVAudioEngine не переживает смену формата входа на лету. Каналов
+    /// распознавания это не задевает — у каждого свой конвертер к однажды выбранному формату
+    /// анализа.
+    private func handleRouteChange() {
+        applyOutputRoute()
+        guard isRunning, !isSuspended else { return }
+        let session = AVAudioSession.sharedInstance()
+        let glassesAvailable = session.availableInputs?.contains(where: { $0.portType == .bluetoothHFP }) ?? false
+        guard glassesAvailable != isUsingGlassesMic else { return }
+
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+        applyPreferredInput()
+        let format = engine.inputNode.inputFormat(forBus: 0)
+        guard format.sampleRate > 0 else {
+            try? engine.start()
+            return
+        }
+        installTap(format: format)
+        try? engine.start()
     }
 
     enum HubError: LocalizedError {

@@ -169,8 +169,12 @@ final class SimultaneousInterpreter: ObservableObject {
 
         do {
             voice.attach(to: AudioCaptureHub.shared.audioEngine)
+            // requiresPhoneMic: true — переводчик обязан слышать собеседника непрерывно, включая
+            // моменты, когда сам читает перевод вслух. Настройка «слушать очками, пока молчим» на
+            // это время как раз отключила бы вход, а нам нужно ровно противоположное.
             listener = try await AudioCaptureHub.shared.addListener(
                 locale: source.speechLocale,
+                requiresPhoneMic: true,
                 onFinal: { [weak self] text in self?.accept(final: text) },
                 onVolatile: { [weak self] text in self?.inFlight = text })
             voice.start()

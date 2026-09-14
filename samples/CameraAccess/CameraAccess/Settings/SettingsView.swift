@@ -21,6 +21,7 @@ struct SettingsView: View {
     @AppStorage(GlassesAssistant.phraseKey) private var assistantPhrase = GlassesAssistant.defaultPhrase
     @StateObject private var assistant = GlassesAssistant.shared
     @StateObject private var hub = AudioCaptureHub.shared
+    @AppStorage(AudioCaptureHub.preferGlassesMicKey) private var preferGlassesMic = false
 
     private var engine: IntelligenceEngine {
         IntelligenceEngine(rawValue: intelligenceRaw) ?? .gigachat
@@ -191,6 +192,11 @@ struct SettingsView: View {
                     StatusLine(kind: .warning, text: message)
                 }
             }
+
+            Toggle(isOn: $preferGlassesMic) {
+                SettingsRow(icon: "eyeglasses", tint: .brand, title: "Слушать очками, пока молчу",
+                            subtitle: hub.isUsingGlassesMic ? "Сейчас: очки" : nil)
+            }
         } header: {
             Text("Голос")
         } footer: {
@@ -198,8 +204,17 @@ struct SettingsView: View {
             // проверяет и качает модель заранее, а главное — показывает настоящую причину сбоя,
             // если сервер Apple временно не отдал пакет для языка: без неё это выглядело как
             // «микрофон не работает», хотя дело было в одной неудачной попытке скачивания.
+            //
+            // Про переключатель ниже: как в гарнитуре — пока играет звук, микрофоны выключены и
+            // звук идёт в полном качестве; как только всё стихает, включается микрофон очков, а
+            // качество звука падает. Затрагивает ассистента, диктовку в чате и режимы эфира.
+            // Синхронный переводчик всегда слушает телефоном — ему нужно слышать собеседника
+            // непрерывно, в том числе пока в ухо звучит перевод.
             Text("Язык, который слушает микрофон в чате и в голосовых командах. Скачивается один "
-                 + "раз и работает дальше без сети.")
+                 + "раз и работает дальше без сети. Переключатель ниже — как в гарнитуре: пока "
+                 + "играет звук, микрофоны выключены и звучит полное качество; как только стихает, "
+                 + "включается микрофон очков, а качество падает. Переводчика не касается — там "
+                 + "нужно слышать собеседника, пока звучит перевод.")
         }
     }
 

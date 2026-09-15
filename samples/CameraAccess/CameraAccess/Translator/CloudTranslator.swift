@@ -27,6 +27,23 @@ final class CloudTranslator: ObservableObject {
     @Published private(set) var lastUsedFallback = false
     @Published private(set) var lastFallbackReason: String?
 
+    /// Once облако подвело один раз за сеанс, все последующие отрезки идут сразу на Qwen3 без
+    /// повторной попытки — до конца ЭТОГО сеанса. Без этого каждая следующая фраза платила бы тем
+    /// же таймаутом заново, и разговор с плохой сетью означал бы паузу в 3с перед каждой репликой,
+    /// а не один раз в начале.
+    private var stickyFallback = false
+    /// Сколько ждать ответ облака, прежде чем считать его недоступным. Дольше пары секунд перевод
+    /// всё равно бесполезен — собеседник уже сказал следующую фразу.
+    private static let cloudTimeout: UInt64 = 3_000_000_000
+
+    /// Вызывается один раз в начале нового сеанса переводчика — снимает липкий откат из
+    /// предыдущего разговора, чтобы разовый сетевой сбой не прибивал облако навсегда.
+    func beginSession() {
+        stickyFallback = false
+        lastUsedFallback = false
+        lastFallbackReason = nil
+    }
+
     /// Which hosted service translates. GigaChat and YandexGPT are the two the app is configured
     /// for; the local model is not a cloud option, so selecting it in the chat does not drag the
     /// translator along with it.
@@ -71,7 +88,7 @@ final class CloudTranslator: ObservableObject {
                    to targetName: String,
                    recentContext: [String]) async throws -> String {
         let service = self.service
-        if service.isConfigured {
+        if !stickyFallback, service.isConfigured {
             requestCount += 1
             do {
                 let answer = try await requestCloud(text, service: service,
@@ -82,9 +99,11 @@ final class CloudTranslator: ObservableObject {
                 return answer
             } catch {
                 lastFallbackReason = error.localizedDescription
+                stickyFallback = true
             }
-        } else {
+        } else if !stickyFallback {
             lastFallbackReason = "\(service.label) has no key set"
+            stickyFallback = true
         }
 
         lastUsedFallback = true
@@ -109,23 +128,51 @@ final class CloudTranslator: ObservableObject {
             prompt += "Предыдущая фраза (для связности, не переводить): \(previous)\n"
         }
         prompt += "\n" + text
+        // Captured as a `let` below rather than the `var` built above: a task-group closure must
+        // be @Sendable, and a mutable outer variable captured there is exactly the kind of thing
+        // strict concurrency checking rejects, even though nothing actually mutates it afterward.
+        let promptToSend = prompt
 
         // A short timeout on purpose: past a couple of seconds the translation is useless anyway,
         // and falling back to the local model beats making the user wait for something stale.
-        let answer: String
-        switch service {
-        case .gigachat:
-            answer = try await GigaChatService.shared.ask(text: prompt, imageData: nil, history: [])
-        case .yandexgpt:
-            answer = try await YandexGPTService.shared.ask(text: prompt, imageData: nil, history: [])
+        // This used to be a comment with no code behind it -- requestCloud had no timeout at all,
+        // so a slow or hanging network call just sat there for however long URLSession's own
+        // default timeout is (a minute or more), and the interpreter looked completely dead for
+        // the whole time rather than falling back the way the comment claimed it did.
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                let answer: String
+                switch service {
+                case .gigachat:
+                    answer = try await GigaChatService.shared.ask(text: promptToSend, imageData: nil, history: [])
+                case .yandexgpt:
+                    answer = try await YandexGPTService.shared.ask(text: promptToSend, imageData: nil, history: [])
+                }
+                let cleaned = LocalLLMTranslator.cleaned(answer)
+                guard !cleaned.isEmpty else { throw CloudTranslatorError.emptyReply }
+                return cleaned
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: Self.cloudTimeout)
+                throw CloudTranslatorError.timedOut
+            }
+            // First one back wins; the loser is cancelled so a cloud reply that eventually shows
+            // up after the timeout doesn't keep the request alive for no reason.
+            guard let result = try await group.next() else { throw CloudTranslatorError.timedOut }
+            group.cancelAll()
+            return result
         }
-        let cleaned = LocalLLMTranslator.cleaned(answer)
-        guard !cleaned.isEmpty else { throw CloudTranslatorError.emptyReply }
-        return cleaned
     }
 
     enum CloudTranslatorError: LocalizedError {
         case emptyReply
-        var errorDescription: String? { "The service returned an empty translation." }
+        case timedOut
+
+        var errorDescription: String? {
+            switch self {
+            case .emptyReply: return "The service returned an empty translation."
+            case .timedOut: return "Cloud translation timed out."
+            }
+        }
     }
 }

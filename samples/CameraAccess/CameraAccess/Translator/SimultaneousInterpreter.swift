@@ -45,21 +45,25 @@ final class InterpreterVoice {
     private var outputFormat: AVAudioFormat?
     private var usesEngine = false
 
-    /// Attach to the shared engine. Idempotent -- start()/stop() cycles call this again on the
-    /// same engine without re-attaching -- and safe even while the engine is already recording,
-    /// which it usually is by the time this runs: the assistant's own listener keeps it running in
-    /// the background. Apple documents attach/connect as fine on a live engine, but reconfiguring
-    /// the graph while it's rendering has a real history of silently disturbing an already-installed
-    /// input tap -- which would explain "hears nothing, no error anywhere" better than anything
-    /// else in this file. Pausing around the mutation and restarting afterward is the
-    /// documented-safe way to change a running engine's graph.
+    /// Attach to the shared engine, reconnecting fresh against the CURRENT mixer format every time
+    /// this is called rather than trusting a connection made during a previous session. It used to
+    /// skip re-attaching entirely once already attached, which seemed safe since Apple documents
+    /// attach/connect as fine on a live engine. In practice a route change between sessions (glasses
+    /// connecting/disconnecting, which changes the input's native sample rate) can leave that old
+    /// connection using a mixer format that no longer matches what the engine actually negotiates
+    /// once restarted, and reconnecting mismatched formats is exactly the kind of thing AVAudioEngine
+    /// hard-crashes on rather than erroring -- the best fit for "closes the app, specifically on
+    /// starting a new session" of anything in this file.
     func attach(to engine: AVAudioEngine) {
-        guard !engine.attachedNodes.contains(player) else { return }
         let format = engine.mainMixerNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { return }
         let wasRunning = engine.isRunning
         if wasRunning { engine.pause() }
-        engine.attach(player)
+        if engine.attachedNodes.contains(player) {
+            engine.disconnectNodeOutput(player)
+        } else {
+            engine.attach(player)
+        }
         engine.connect(player, to: engine.mainMixerNode, format: format)
         if wasRunning {
             try? engine.start()
@@ -124,7 +128,6 @@ final class InterpreterVoice {
     func stop() {
         synthesizer.stopSpeaking(at: .immediate)
         player.stop()
-        if usesEngine { player.play() }
     }
 }
 
@@ -178,6 +181,12 @@ final class SimultaneousInterpreter: ObservableObject {
             errorText = "Нужны разрешения на микрофон и распознавание речи."
             return
         }
+
+        // Новая сессия — новый шанс для облака: откат на Qwen3 внутри сеанса "липкий" и не
+        // отступает сам по себе (см. CloudTranslator), но именно поэтому его нужно явно снять
+        // здесь, иначе разовый сетевой сбой в прошлом разговоре навсегда прибил бы облако для
+        // всех последующих сеансов.
+        CloudTranslator.shared.beginSession()
 
         do {
             voice.attach(to: AudioCaptureHub.shared.audioEngine)

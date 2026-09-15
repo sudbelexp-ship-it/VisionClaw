@@ -131,8 +131,12 @@ final class HotCommandStore: ObservableObject {
 
         for command in candidates {
             let needle = GlassesAssistant.normalize(command.phrase)
-            guard !needle.isEmpty, text.hasPrefix(needle) else { continue }
-            let rest = String(text.dropFirst(needle.count)).trimmingCharacters(in: .whitespaces)
+            // Fuzzy, not an exact prefix: the recognizer misspells a phrase often enough ("окей
+            // сбер" as "окей збер") that requiring an exact match made commands that worked in
+            // testing silently stop firing on real speech. See FuzzyPhrase.
+            guard !needle.isEmpty,
+                  let rest = FuzzyPhrase.matchAndConsume(needle, in: text, anchored: true)
+            else { continue }
             // A command that takes no argument must be the whole utterance, or "выключи переводчик
             // а потом позвони маме" would hang up the translator and swallow the rest.
             if !command.action.takesArgument, !rest.isEmpty { continue }

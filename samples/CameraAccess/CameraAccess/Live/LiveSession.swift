@@ -46,7 +46,14 @@ enum LiveMode: String, CaseIterable, Identifiable {
 }
 
 struct LiveEntry: Identifiable, Equatable {
-    enum Kind { case question, answer, narration, failure }
+    /// pointing is its own kind, not question+answer, for the same reason narration gets an empty
+    /// history in send(): every pointing gesture appends the identical placeholder text ("👉 показал
+    /// пальцем"), so once a few of them piled up in entries.suffix(6) the model saw the same user
+    /// line repeated several times over with a different answer each time and, having no image
+    /// attached to those older turns to tell them apart, started echoing a nearby old answer
+    /// instead of looking at the new picture -- this is what "the 8th thing pointed at repeats the
+    /// 7th answer" actually was.
+    enum Kind { case question, answer, narration, pointing, failure }
     let id = UUID()
     let kind: Kind
     let text: String
@@ -306,14 +313,13 @@ final class LiveSession: ObservableObject {
             quietUntil = Date().addingTimeInterval(Self.postAnswerQuietPeriod)
         }
         status = "Вижу палец…"
-        entries.append(LiveEntry(kind: .question, text: "👉 показал пальцем", image: nil))
 
         let prompt = """
             Человек указывает пальцем в кадре камеры очков. Назови и коротко опиши именно то, на \
             что указывает палец, а не всю сцену целиком. Одно-два предложения, разговорно, без \
             списков и заголовков: ответ читается вслух.
             """
-        await send(prompt: prompt, image: image, kind: .answer)
+        await send(prompt: prompt, image: image, kind: .pointing)
     }
 
     private func send(prompt: String, image: UIImage, kind: LiveEntry.Kind) async {
@@ -323,14 +329,19 @@ final class LiveSession: ObservableObject {
         let engine = IntelligenceEngine(
             rawValue: UserDefaults.standard.string(forKey: IntelligenceEngine.defaultsKey) ?? "") ?? .gigachat
         let backend = DirectAIBackendRouter.backend(for: engine)
-        // Контекст нужен вопросам — без него «а это что?» не к чему привязать. Рассказу гида он
-        // вреден: модель, видящая собственный предыдущий ответ, охотно повторяет его на новой
-        // картинке. Запрет на повтор остаётся в самом промпте списком «уже рассказано».
-        let history: [ChatTurn] = kind == .narration ? [] : entries.suffix(6).compactMap { entry in
+        // Контекст нужен вопросам — без него «а это что?» не к чему привязать. Рассказу гида и
+        // жесту пальцем он вреден по одной и той же причине: модель, видящая собственный предыдущий
+        // ответ, охотно повторяет его на новой картинке -- а у "показал пальцем" вдобавок текст
+        // самого вопроса одинаковый КАЖДЫЙ раз, так что пара старых реплик в истории выглядит как
+        // один и тот же вопрос, заданный дважды, без разницы в картинке (у прошлых ходов её вообще
+        // нет). Запрет на повтор для гида остаётся в самом промпте списком «уже рассказано»; для
+        // жеста повторяться особо нечему — каждый раз называется другой предмет.
+        let excludesHistory = kind == .narration || kind == .pointing
+        let history: [ChatTurn] = excludesHistory ? [] : entries.suffix(6).compactMap { entry in
             switch entry.kind {
             case .question: return ChatTurn(role: .user, text: entry.text)
             case .answer, .narration: return ChatTurn(role: .assistant, text: entry.text)
-            case .failure: return nil
+            case .pointing, .failure: return nil
             }
         }
 
@@ -342,7 +353,7 @@ final class LiveSession: ObservableObject {
             let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
             let skipped = trimmed.lowercased().hasPrefix("пропустить") || trimmed.lowercased().hasPrefix("skip")
             guard !skipped, !trimmed.isEmpty else { return }
-            let keptImage = kind == .narration ? image : nil
+            let keptImage = excludesHistory ? image : nil
             let file = keptImage.flatMap { ConversationStore.shared.storeImage($0, session: sessionId) }
             entries.append(LiveEntry(kind: kind, text: trimmed, image: keptImage, imageFile: file))
             SpeechSynthesizer.shared.speak(trimmed)
@@ -360,7 +371,7 @@ final class LiveSession: ObservableObject {
             let role: StoredMessage.Role
             switch entry.kind {
             case .question: role = .user
-            case .answer, .narration: role = .assistant
+            case .answer, .narration, .pointing: role = .assistant
             case .failure: role = .note
             }
             return StoredMessage(role: role, text: entry.text, imageFile: entry.imageFile)

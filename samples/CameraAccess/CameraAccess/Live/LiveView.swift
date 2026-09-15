@@ -218,6 +218,7 @@ private struct LiveRow: View {
         case .question: return "person.wave.2"
         case .answer: return "bubble.left"
         case .narration: return "sparkles"
+        case .pointing: return "hand.point.up.left.fill"
         case .failure: return "exclamationmark.triangle.fill"
         }
     }
@@ -227,6 +228,7 @@ private struct LiveRow: View {
         case .question: return .secondary
         case .answer: return .brand
         case .narration: return .yellow
+        case .pointing: return .brand
         case .failure: return .orange
         }
     }

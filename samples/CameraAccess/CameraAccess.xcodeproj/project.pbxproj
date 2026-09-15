@@ -52,6 +52,7 @@
 		F2A96D3E71B04C58AE2D3B16 /* LocalLLMTranslator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */; };
 		6D1C48B0E93F275AC0846F1D /* SimultaneousInterpreter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */; };
 		9C471E28A5D06F3B71E8940A /* GlassesCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */; };
+		9F1E7C3A2D5B4861A0F3E2D1 /* FuzzyPhrase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F1E7C3A2D5B4861A0F3E2D0 /* FuzzyPhrase.swift */; };
 		2F84A07C6B19D35E80C47A2D /* GlassesAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0E5D3B92F17C48A5E20B61 /* GlassesAssistant.swift */; };
 		8E3A17C05D2B649F3A18C07E /* AudioCaptureHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B9D4E128A7F03C6D142E9B8 /* AudioCaptureHub.swift */; };
 		6E290C75D8B31A40F96C25E8 /* LiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B71FE2035CD79A1B6034E9 /* LiveView.swift */; };
@@ -153,6 +154,7 @@
 		8B45E01D9C7A26F340B18ED2 /* LocalLLMTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLLMTranslator.swift; sourceTree = "<group>"; };
 		A7E20F94C15B38D6027EA4C3 /* SimultaneousInterpreter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimultaneousInterpreter.swift; sourceTree = "<group>"; };
 		0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesCamera.swift; sourceTree = "<group>"; };
+		9F1E7C3A2D5B4861A0F3E2D0 /* FuzzyPhrase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyPhrase.swift; sourceTree = "<group>"; };
 		6A0E5D3B92F17C48A5E20B61 /* GlassesAssistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesAssistant.swift; sourceTree = "<group>"; };
 		5B9D4E128A7F03C6D142E9B8 /* AudioCaptureHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureHub.swift; sourceTree = "<group>"; };
 		84B71FE2035CD79A1B6034E9 /* LiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveView.swift; sourceTree = "<group>"; };
@@ -420,6 +422,7 @@
 				30F9A6D5C82E147B9503D6AF /* HotCommands.swift */,
 				0D5B62C4F81A39E7C60B24D8 /* GlassesCamera.swift */,
 				9F1E7C3A2D5B4861A0F3E2CC /* WhisperRecognizer.swift */,
+				9F1E7C3A2D5B4861A0F3E2D0 /* FuzzyPhrase.swift */,
 			);
 			path = Assistant;
 			sourceTree = "<group>";
@@ -633,6 +636,7 @@
 				4A2AC56DF179837989B346A9 /* AskAssistantView.swift in Sources */,
 				7F90C2A44C35C5E053017C8B /* CameraCaptureView.swift in Sources */,
 				9F1E7C3A2D5B4861A0F3E2CB /* WhisperRecognizer.swift in Sources */,
+				9F1E7C3A2D5B4861A0F3E2D1 /* FuzzyPhrase.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

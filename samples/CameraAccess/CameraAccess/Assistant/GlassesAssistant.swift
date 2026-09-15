@@ -1,5 +1,8 @@
 // VisionClaw - GlassesAssistant.swift
-// Hands-free: say your phrase, the glasses take a picture, and the answer comes back in your ear.
+// Hands-free: say your phrase, ask about what's in front of you, and the answer comes back in your
+// ear -- a photo only for questions that are actually about that (see isVisualQuestion below).
+// Taking one for every single question made the glasses chime and snap a picture even for "напомни
+// мне позвонить маме", which has nothing to do with the camera.
 //
 // This is the piece that makes the app a glasses app rather than a chat app that happens to accept
 // photos. Everything it does lands in the same ChatSession the screen shows, so a question asked
@@ -51,6 +54,14 @@ final class GlassesAssistant: ObservableObject {
     private var listener: AudioCaptureHub.Listener?
     private var isHandling = false
     private var pendingWorkItem: DispatchWorkItem?
+    /// True from the moment the wake phrase is heard until the question is actually handled.
+    /// Recognition delivers each finished phrase as its own independent result (see consider()),
+    /// so a pause after just the wake phrase -- "окей сбер," <breath> "какая погода" -- arrives as
+    /// TWO separate calls, not one. Without this, the first call alone (empty tail) fired the
+    /// "what do you see" fallback and took a photo before the real question ever arrived, which is
+    /// exactly what made the assistant answer a weather question with a picture of the room.
+    private var isAwaitingQuestion = false
+    private var collectedQuestion = ""
 
     // MARK: Control
 
@@ -79,8 +90,8 @@ final class GlassesAssistant: ObservableObject {
                 locale: locale,
                 // Черновой текст проверяется тоже: ждать закрепления фразы значит реагировать на
                 // обращение через секунду после того, как человек уже задал вопрос.
-                onFinal: { [weak self] text in self?.consider(text) },
-                onVolatile: { [weak self] text in self?.consider(text) })
+                onFinal: { [weak self] text in self?.consider(text, isFinal: true) },
+                onVolatile: { [weak self] text in self?.consider(text, isFinal: false) })
             isListening = true
             status = "Listening for \u{201C}\(Self.phrase)\u{201D}"
         } catch {
@@ -92,6 +103,8 @@ final class GlassesAssistant: ObservableObject {
     func stop() {
         pendingWorkItem?.cancel()
         pendingWorkItem = nil
+        isAwaitingQuestion = false
+        collectedQuestion = ""
         AudioCaptureHub.shared.removeListener(listener)
         listener = nil
         isListening = false
@@ -127,11 +140,13 @@ final class GlassesAssistant: ObservableObject {
     /// Dictation punctuates and capitalises unpredictably, and a phrase said quickly comes back
     /// with the words run together differently every time, so both sides are reduced to bare
     /// letters and digits before comparing.
-    private func consider(_ transcript: String) {
+    /// Volatile revisions of a not-yet-finished phrase arrive as a growing rewrite of the SAME
+    /// text ("окей сбер" -> "окей сбер как") -- appending those would double up the trigger phrase
+    /// itself. Only a settled, final chunk can safely be treated as a continuation of the same
+    /// address, since only then is it guaranteed to be genuinely new speech rather than a revision
+    /// of what "consider" already looked at.
+    private func consider(_ transcript: String, isFinal: Bool) {
         guard !isHandling else { return }
-        // Каждый результат — самостоятельная фраза, а не продолжение прошлой, поэтому отслеживать
-        // прочитанное больше не нужно. От повторного срабатывания на одном и том же черновике
-        // защищают флаг isHandling и отложенный запуск ниже.
         let fresh = transcript
         heard = fresh
 
@@ -139,7 +154,9 @@ final class GlassesAssistant: ObservableObject {
         // "next track" without being addressed. They are anchored to the start of what is left of
         // the utterance, so they cannot fire from the middle of a sentence.
         if let hit = HotCommandStore.shared.match(in: fresh) {
-                pendingWorkItem?.cancel()
+            isAwaitingQuestion = false
+            collectedQuestion = ""
+            pendingWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 Task { @MainActor in await self?.run(hit) }
             }
@@ -151,26 +168,67 @@ final class GlassesAssistant: ObservableObject {
             return
         }
 
+        // Уже обратились фразой-триггером и ждём, что скажут дальше: финальный (не черновой) кусок
+        // здесь — продолжение того же вопроса, а не что-то новое. Без этой ветки "окей сбер,"
+        // <пауза> "какая погода" распадалось на два отдельных результата распознавания: первый
+        // (пустой хвост) срабатывал сам по себе как "а что ты видишь?" с фото, а второй
+        // ("какая погода") приходил уже ни к чему не привязанным и терялся — ассистент отвечал на
+        // вопрос о погоде фотографией комнаты.
+        if isAwaitingQuestion {
+            guard isFinal else { return }
+            let addition = fresh.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !addition.isEmpty else { return }
+            collectedQuestion = collectedQuestion.isEmpty ? addition : collectedQuestion + " " + addition
+            scheduleHandle(quickly: true)
+            return
+        }
+
         let needle = Self.normalize(Self.phrase)
         guard !needle.isEmpty else { return }
         let haystack = Self.normalize(fresh)
-        guard let range = haystack.range(of: needle) else { return }
-
-        let question = String(haystack[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        // Fuzzy, not an exact substring: dictation hands back "окей сбер" as "окей збер" often
+        // enough that requiring an exact match meant the phrase silently stopped working on real
+        // speech despite testing fine. See FuzzyPhrase for the edit-distance budget.
+        guard let question = FuzzyPhrase.matchAndConsume(needle, in: haystack, anchored: false)
+        else { return }
         // Короткий отклик: без него невозможно отличить «фраза не распозналась» от «распозналась,
         // но дальше что-то сломалось», а это две совершенно разные починки.
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         lastTriggerAt = Date()
         status = "Слышу вас…"
+        // Переходить в режим накопления есть смысл только на закреплённой фразе: волатильный
+        // "окей сбер" через мгновение сам перепишется в "окей сбер какая погода", безо всякого
+        // накопления с нашей стороны -- это тот же растущий черновик, что и раньше, просто уже
+        // включающий фразу-триггер целиком.
+        isAwaitingQuestion = isFinal
+        collectedQuestion = question
+        // Пустой хвост на закреплённой фразе — самый неопределённый случай: возможно, дальше
+        // ничего не будет ("окей сбер" само по себе — вопрос "что ты видишь"), а возможно, вопрос
+        // придёт отдельным куском после паузы. Для Whisper (русский) это вообще единственный вид
+        // кусков — там нет черновиков, и следующий кусок появится не раньше чем через паузу в
+        // 0.6с плюс время распознавания, так что короткого таймаута может не хватить.
+        scheduleHandle(quickly: !(isFinal && question.isEmpty))
+    }
 
-        // Wait a beat before acting: the words right after the phrase are still arriving, and
-        // firing on the first partial would send "what do you" instead of "what do you see".
+    /// (Re)starts the quiet-period timer that decides the wake phrase is done being followed up
+    /// on. Called both right after the trigger and again for every extra chunk that arrives while
+    /// isAwaitingQuestion is true, so a pause mid-question keeps pushing the deadline out instead
+    /// of firing on whatever had arrived so far. `quickly` picks between the two timeouts: fast
+    /// when there is already real text to act on (or this is just a volatile revision that will be
+    /// superseded anyway), slow when the phrase came back with nothing after it and a follow-up
+    /// chunk may still be on its way through a full silence-cut-then-transcribe cycle.
+    private func scheduleHandle(quickly: Bool) {
         pendingWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            Task { @MainActor in await self?.handle(question: question) }
+            guard let self else { return }
+            let question = self.collectedQuestion
+            self.isAwaitingQuestion = false
+            self.collectedQuestion = ""
+            Task { @MainActor in await self.handle(question: question) }
         }
         pendingWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        let delay = quickly ? 1.2 : 3.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Lowercased letters and digits only. "Окей, Клод!" and "окей клод" must match.
@@ -256,6 +314,25 @@ final class GlassesAssistant: ObservableObject {
         SpeechRecognizerOneShot.activeLocale().identifier.hasPrefix("ru") ? russian : english
     }
 
+    /// Substrings that mark a question as being about what's in front of the camera. A keyword
+    /// list, not an exact-phrase list: "что ты видишь", "опиши, что сейчас передо мной" and "что
+    /// это стоит впереди меня" are all real variants of the same handful of intents, and a fixed
+    /// phrase list would need to anticipate every rewording. Taking a photo for every single
+    /// question -- the previous behaviour -- made the glasses chime and take a picture even for
+    /// "напомни мне" or "как дела", which is what the user is actually addressing.
+    private static let visualTriggers = [
+        "видишь", "вижу", "видно",
+        "передо мной", "перед тобой", "впереди",
+        "что это", "что там", "что здесь",
+        "опиши",
+        "камер", "фото", "снимок", "картин",
+    ]
+
+    private static func isVisualQuestion(_ text: String) -> Bool {
+        let normalized = Self.normalize(text)
+        return Self.visualTriggers.contains { normalized.contains($0) }
+    }
+
     private func handle(question: String) async {
         guard !isHandling else { return }
         isHandling = true
@@ -268,12 +345,17 @@ final class GlassesAssistant: ObservableObject {
         // which is a reasonable way to ask "what am I looking at".
         let text = question.isEmpty ? "Что ты видишь?" : question
 
-        status = "Taking a photo…"
-        let photo = await capturePhoto?()
-        if photo == nil {
-            // Still worth asking: plenty of questions need no picture, and refusing outright
-            // because the glasses were folded would be worse than answering the words.
-            NSLog("[VisionClaw] assistant: no photo available, asking without one")
+        let photo: UIImage?
+        if question.isEmpty || Self.isVisualQuestion(question) {
+            status = "Taking a photo…"
+            photo = await capturePhoto?()
+            if photo == nil {
+                // Still worth asking: plenty of questions need no picture, and refusing outright
+                // because the glasses were folded would be worse than answering the words.
+                NSLog("[VisionClaw] assistant: no photo available, asking without one")
+            }
+        } else {
+            photo = nil
         }
 
         status = "Asking \(ChatSession.shared.engine.label)…"

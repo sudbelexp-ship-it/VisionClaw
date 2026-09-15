@@ -34,14 +34,26 @@
 // AVAudioEngine означали, что второй молча не получал ничего. Модули распознавания читают общий
 // поток буферов — по одному каналу на язык, независимо от того, очки сейчас или телефон.
 //
-// Русский — отдельным путём, через Whisper
-// -----------------------------------------
-// Apple Intelligence поддерживает 16 языков, и русского среди них нет — SpeechTranscriber для него
-// в принципе не устанавливается, это не вопрос повторной попытки. WhisperChannel ниже и
-// WhisperRecognizer.swift решают это целиком в обход Apple: whisper.cpp, открытый и полностью
-// локальный, без списка разрешённых языков. Плата за это тоже настоящая: Whisper не даёт
-// потокового volatile-текста, только готовый кусок после паузы в речи — см. заголовок
-// WhisperRecognizer.swift.
+// Когда Apple отказывает — Whisper, для ЛЮБОГО языка
+// -----------------------------------------------------
+// SpeechTranscriber не зависит от Apple Intelligence как фичи (работает и на iPhone 12–14, где
+// Apple Intelligence в принципе недоступна), но гейтится САМ, отдельно и по языку, и по стране —
+// у него свой список поддерживаемых языков (уже) и свой список поддерживаемых стран, независимо
+// друг от друга и от того, включён ли у пользователя Apple Intelligence вообще. Ни один публичный
+// API не говорит, ПОЧЕМУ конкретная связка язык+страна отклонена — только сам факт. Раньше здесь
+// было "русский не входит в 16 языков Apple Intelligence, значит сразу Whisper для ru" — жёстко
+// зашитое правило по одному языку. Но если причина отказа — страна пользователя, а не язык, это
+// правило ничего не говорит про остальные языки: английский, турецкий, любой другой может так же
+// не устанавливаться на этом конкретном телефоне, и жёсткий список никогда бы этого не поймал.
+//
+// Поэтому теперь только одно правило: пробовать SpeechTranscriber.supportedLocale(equivalentTo:)
+// для ЛЮБОЙ локали; если он отвечает nil — по любой причине, язык это или страна — WhisperChannel
+// ниже и WhisperRecognizer.swift берут её целиком на себя. Whisper всё равно один и тот же для
+// всех языков (просто разный код языка в запросе), так что расширить охват ничего не стоит,
+// в отличие от того, чтобы гадать заранее, какой список языков зашить.
+//
+// Плата за это настоящая: Whisper не даёт потокового volatile-текста, только готовый кусок после
+// паузы в речи — см. заголовок WhisperRecognizer.swift.
 
 import AVFoundation
 import Foundation
@@ -212,21 +224,19 @@ final class AudioCaptureHub: ObservableObject {
                      onFinal: @escaping (String) -> Void,
                      onVolatile: ((String) -> Void)? = nil,
                      onLevel: ((Float, Double) -> Void)? = nil) async throws -> Listener {
-        // Резолв через SpeechTranscriber, а не сырой Locale(identifier:). Это не формальность:
-        // без него скачивание может тихо кончиться состоянием "Not Installing" — assetInstallationRequest
-        // берёт «поддерживаемый» локаль за чистую монету, а сервер потом не находит под него
-        // готового ассета. supportedLocale(equivalentTo:) сверяется с реально доступными сборками
-        // и подбирает совпадающий вариант (например, другой региональный код) вместо этого.
-        let resolved = try await ensureLanguageModel(for: locale)
+        let route = try await resolveRoute(for: locale)
+        let resolved = route.locale
 
         let listener = Listener(locale: resolved, onFinal: onFinal,
                                 onVolatile: onVolatile, onLevel: onLevel)
         if !isRunning {
             try startEngine()
         }
-        if Self.isWhisperLocale(resolved) {
-            // Тот же принцип "один язык — один канал", только по свою сторону: русский никогда
-            // не делит канал с Apple-путём и наоборот.
+        switch route {
+        case .whisper:
+            // Тот же принцип "один язык — один канал", только по свою сторону: Whisper-путь
+            // никогда не делит канал с Apple-путём и наоборот, даже для одного и того же языка
+            // (не должно совпасть, но на всякий случай оставляет каналы независимыми).
             if let existing = whisperChannels.first(where: { $0.locale.identifier == resolved.identifier }) {
                 existing.listeners.append(listener)
             } else {
@@ -237,16 +247,16 @@ final class AudioCaptureHub: ObservableObject {
                 channel.listeners.append(listener)
                 whisperChannels.append(channel)
             }
-            return listener
-        }
-        // Один язык — один канал: эфир и фраза-триггер слушают одно и то же и не должны
-        // резервировать языковую модель дважды.
-        if let existing = channels.first(where: { $0.locale.identifier == resolved.identifier }) {
-            existing.listeners.append(listener)
-        } else {
-            let channel = try await makeChannel(locale: resolved)
-            channel.listeners.append(listener)
-            channels.append(channel)
+        case .apple:
+            // Один язык — один канал: эфир и фраза-триггер слушают одно и то же и не должны
+            // резервировать языковую модель дважды.
+            if let existing = channels.first(where: { $0.locale.identifier == resolved.identifier }) {
+                existing.listeners.append(listener)
+            } else {
+                let channel = try await makeChannel(locale: resolved)
+                channel.listeners.append(listener)
+                channels.append(channel)
+            }
         }
         return listener
     }
@@ -284,21 +294,40 @@ final class AudioCaptureHub: ObservableObject {
     /// совпадающий вариант вместо этого.
     @discardableResult
     func ensureLanguageModel(for locale: Locale) async throws -> Locale {
-        // Русский не входит в 16 языков Apple Intelligence, и SpeechTranscriber для него в принципе
-        // не ставится — это не тот случай, который supportedLocale(equivalentTo:) ниже может
-        // разрешить. Whisper подключается отдельным путём целиком, ещё до обращения к Apple.
-        // См. заголовок WhisperRecognizer.swift.
-        if Self.isWhisperLocale(locale) {
-            try await ensureWhisperModel()
-            return locale
+        try await resolveRoute(for: locale).locale
+    }
+
+    /// Каким путём слушать `locale`, и локаль, разрешённая под этот путь. Единственное место, где
+    /// принимается это решение — и addListener, и ensureLanguageModel сверяются с ним, а не
+    /// держат каждый свою копию правила.
+    private enum RecognitionRoute {
+        case apple(Locale)
+        case whisper(Locale)
+
+        var locale: Locale {
+            switch self {
+            case .apple(let locale), .whisper(let locale): return locale
+            }
         }
+    }
+
+    /// Пробует SpeechTranscriber для `locale`; если он недоступен — по языку, по стране, неважно,
+    /// SpeechTranscriber не говорит, почему — забирает её целиком на Whisper. Раньше здесь было
+    /// жёсткое правило "русский не входит в 16 языков Apple Intelligence, значит сразу Whisper для
+    /// ru", и только для ru: если причина отказа на КОНКРЕТНОМ телефоне — не язык, а страна
+    /// (SpeechTranscriber гейтится по обоим независимо), это правило ничего не говорило про
+    /// остальные языки, которые точно так же могли не устанавливаться. Пробовать реально и
+    /// смотреть на результат вместо того, чтобы гадать заранее, ловит оба случая одним и тем же
+    /// кодом.
+    private func resolveRoute(for locale: Locale) async throws -> RecognitionRoute {
         guard let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
-            throw HubError.unsupportedLanguage(locale.identifier)
+            try await ensureWhisperModel()
+            return .whisper(locale)
         }
 
         let alreadyInstalled = await SpeechTranscriber.installedLocales
         if alreadyInstalled.contains(where: { $0.identifier == resolved.identifier }) {
-            return resolved
+            return .apple(resolved)
         }
 
         let transcriber = SpeechTranscriber(locale: resolved, preset: .progressiveTranscription)
@@ -312,28 +341,24 @@ final class AudioCaptureHub: ObservableObject {
         // На форуме Apple разработчики (подтверждено их же сотрудником) сообщают, что
         // supportedLocale() иногда называет язык поддерживаемым, а установка после этого тихо
         // проваливается — install-заявка зависает в "Not Installing", и downloadAndInstall() не
-        // бросает исключение. Проверяем итог явно, чтобы получить понятную ошибку вместо
-        // молчаливо неработающего микрофона.
+        // бросает исключение. Проверяем итог явно вместо того, чтобы принять слово Apple на веру,
+        // и откатываемся на Whisper, а не бросаем ошибку — то же самое "недоступно по неизвестной
+        // причине", что и нерезолвящаяся локаль выше.
         let installed = await SpeechTranscriber.installedLocales
         guard installed.contains(where: { $0.identifier == resolved.identifier }) else {
-            throw HubError.assetNotInstalled(resolved.identifier)
+            try await ensureWhisperModel()
+            return .whisper(locale)
         }
-        return resolved
+        return .apple(resolved)
     }
 
-    /// Русский и только русский — единственный язык, который Apple Intelligence не поддерживает
-    /// из тех, что реально нужны в этом приложении. Отдельный флаг, а не "пробуем Apple, ловим
-    /// ошибку, откатываемся на Whisper": так решение видно сразу, не после неудачной попытки.
-    private static func isWhisperLocale(_ locale: Locale) -> Bool {
-        locale.identifier.lowercased().hasPrefix("ru")
-    }
-
-    private static let whisperModelFileName = "ggml-base.bin"
+    private static let whisperModelFileName = "ggml-small.bin"
     /// Официальный релиз ggml-org, а не сторонний слепок — та же организация, что публикует сам
-    /// whisper.xcframework в Vendor/. base — компромисс между размером (142 МБ) и качеством;
-    /// small (466 МБ) точнее, но качать его без явного запроса пользователя не стоит.
+    /// whisper.xcframework в Vendor/. small (466 МБ): базовая ggml-base (142 МБ) путала соседние
+    /// буквы на обычной русской речи ("очки" услышанное с неверной первой буквой) — заметно хуже,
+    /// чем стоило того ради вдвое меньшего размера.
     private static let whisperModelURL = URL(
-        string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin")!
+        string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin")!
 
     private static var whisperModelPath: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -343,7 +368,9 @@ final class AudioCaptureHub: ObservableObject {
 
     /// Скачивает модель Whisper при необходимости и держит загруженный распознаватель в памяти.
     /// Как и Apple-путь выше, вызывается и из addListener, и напрямую кнопкой в настройках — модель
-    /// должна быть готова заранее, а не всплывать сюрпризом посреди разговора.
+    /// должна быть готова заранее, а не всплывать сюрпризом посреди разговора. Один и тот же файл
+    /// обслуживает любой язык, который сюда попал (см. resolveRoute) — не только русский, для
+    /// которого он изначально появился.
     private func ensureWhisperModel() async throws {
         if whisperRecognizer != nil { return }
         let path = Self.whisperModelPath
@@ -352,9 +379,14 @@ final class AudioCaptureHub: ObservableObject {
             defer { isPreparingModel = false }
             try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
                                                      withIntermediateDirectories: true)
+            // Прежняя ggml-base лежит рядом под другим именем после перехода на ggml-small —
+            // сама по себе не мешает (путь другой), но 142 МБ мёртвым грузом убирать стоит.
+            let staleBase = path.deletingLastPathComponent().appendingPathComponent("ggml-base.bin")
+            try? FileManager.default.removeItem(at: staleBase)
+
             let (tempURL, response) = try await URLSession.shared.download(from: Self.whisperModelURL)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw HubError.assetNotInstalled("ru")
+                throw HubError.assetNotInstalled("whisper")
             }
             // Перемещаем атомарно, чтобы недокачанный файл никогда не сошёл за готовую модель,
             // если приложение прервётся ровно между скачиванием и следующим запуском.
@@ -365,7 +397,7 @@ final class AudioCaptureHub: ObservableObject {
             // Модель скачалась, но не загрузилась — то есть файл битый или неполный, а не
             // "языка нет". Убираем его, чтобы следующая попытка качала заново, а не читала брак.
             try? FileManager.default.removeItem(at: path)
-            throw HubError.assetNotInstalled("ru")
+            throw HubError.assetNotInstalled("whisper")
         }
         whisperRecognizer = recognizer
     }
@@ -711,7 +743,9 @@ final class AudioCaptureHub: ObservableObject {
     enum HubError: LocalizedError {
         case noMicrophone
         case noCompatibleFormat
-        case unsupportedLanguage(String)
+        /// Больше не бросается за "язык не поддержан Apple" -- resolveRoute откатывается на
+        /// Whisper вместо этого. Остаётся только для отказа самого Whisper (модель не скачалась
+        /// или не загрузилась) -- то есть по-настоящему некуда больше откатываться.
         case assetNotInstalled(String)
 
         var errorDescription: String? {
@@ -720,8 +754,6 @@ final class AudioCaptureHub: ObservableObject {
                 return "Нет доступного микрофона."
             case .noCompatibleFormat:
                 return "Не удалось подобрать формат звука для распознавания."
-            case .unsupportedLanguage(let id):
-                return "Распознавание \(id) на этом телефоне недоступно."
             case .assetNotInstalled(let id):
                 return "Не удалось установить языковую модель \(id). Попробуйте ещё раз позже — "
                     + "иногда сервер временно не отдаёт пакет для этого языка."

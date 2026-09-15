@@ -4,59 +4,51 @@
 //
 // Where the work happens
 // ----------------------
-// Listening and speaking are always on the device; only the translation itself may leave it. The
-// two offline translators were tried first and neither was good enough, so a hosted model now does
-// the job whenever the network allows and Qwen3 takes over the moment it doesn't -- a translator is
-// most needed abroad, which is exactly where the signal is worst, so it can never simply stop.
+// Listening and speaking are always on the device; only the translation itself may leave it.
 //
-//   речь -> текст    SpeechAnalyzer (iOS 26), целиком на устройстве
-//   text -> text     GigaChat/YandexGPT when reachable, else Qwen3 through MLX, or Apple's
-//                    Translation framework -- see TranslatorEngine and CloudTranslator
+//   речь -> текст    SpeechAnalyzer (iOS 26) / whisper.cpp for Russian, целиком на устройстве
+//   text -> text     GigaChat, YandexGPT, or Qwen3 on-device -- see TranslatorModel below
 //   text -> speech   AVSpeechSynthesizer, rendered through the interpreter's own audio engine
 //
-// Requires iOS 18 for TranslationSession, which is why the deployment target moved up from 17.2.
+// Model choice used to be two menus deep (an engine, then a cloud service inside it) plus a
+// separate offline toggle layered on top -- three controls for one decision. It's a straight
+// three-way pick now, right on this screen: the user already knows whether they have signal and
+// which cloud key they'd rather spend, and picking "Qwen" IS the offline choice, no separate
+// switch needed. Apple's on-device Translation framework was the fourth original option; dropped
+// because its own description here already called it the worst of the three at fragment-level
+// speech, and a fourth choice would have undone the point of collapsing this to one picker.
+// CloudTranslator still falls back from whichever cloud service is picked to Qwen3 on its own if
+// that specific request fails -- this collapses the CHOICE, not the existing safety net.
 
-import AVFoundation
-import Speech
 import SwiftUI
-import Translation
 
 // MARK: - Choices
 
-/// Which translator does the text-to-text step.
-///
-/// Apple's is instant to set up and costs nothing, but it translates each chunk in isolation and
-/// is noticeably literal -- and in this mode the chunks are sentence fragments, which it handles
-/// worst of all. The local LLM has to be downloaded once and costs a few hundred milliseconds per
-/// chunk, but it is told what it has already said, so fragments join up into running speech. Both
-/// are fully offline; the trade is setup cost against quality, so the choice is the user's.
-enum TranslatorEngine: String, CaseIterable, Identifiable {
-    /// Hosted model when the network allows, Qwen3 the instant it doesn't. The default: it is the
-    /// only option that is both good enough in a cafe with Wi-Fi and still working on a mountain.
-    case hybrid
-    case localLLM
-    case apple
+/// The three things that can actually do the text-to-text step. Replaces the old two-level
+/// engine+service split: whichever of these is picked IS what translates, not a category that
+/// then needs a second picker to narrow down.
+enum TranslatorModel: String, CaseIterable, Identifiable {
+    case qwen
+    case yandex
+    case gigachat
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .hybrid: return "Облако + запас офлайн"
-        case .localLLM: return "Только Qwen3 на устройстве"
-        case .apple: return "Переводчик Apple"
+        case .qwen: return "Qwen"
+        case .yandex: return "Yandex"
+        case .gigachat: return "GigaChat"
         }
     }
 
-    var blurb: String {
+    /// nil for Qwen -- it isn't a cloud service, it's the on-device fallback everything else
+    /// already falls back to.
+    var cloudService: CloudTranslator.Service? {
         switch self {
-        case .hybrid:
-            return "GigaChat или YandexGPT, пока есть сеть, и Qwen3 автоматически, когда её нет. "
-                + "Лучшее качество; расходует токены всё время разговора."
-        case .localLLM:
-            return "Не покидает телефон и ничего не стоит. Слабее на идиомах и порядке слов."
-        case .apple:
-            return "Встроен, качать нечего. Переводит по предложениям и буквально — с обрывками, "
-                + "которые даёт этот режим, справляется хуже всех."
+        case .qwen: return nil
+        case .yandex: return .yandexgpt
+        case .gigachat: return .gigachat
         }
     }
 }
@@ -135,12 +127,11 @@ struct LiveTranslatorView: View {
     @AppStorage("translatorSource") private var sourceId = "en-US"
     @AppStorage("translatorTarget") private var targetId = "ru-RU"
     @AppStorage("translatorSpeaks") private var speakAloud = true
-    @AppStorage("translatorEngine") private var engineRaw = TranslatorEngine.hybrid.rawValue
+    @AppStorage("translatorModel") private var modelRaw = TranslatorModel.gigachat.rawValue
     @AppStorage("translatorPace") private var paceRaw = InterpreterPace.balanced.rawValue
 
-    @State private var configuration: TranslationSession.Configuration?
     @State private var isDownloadingModel = false
-    @State private var showEngineSheet = false
+    @State private var showSettingsSheet = false
     @State private var sessionId = UUID()
     /// Chunks already written to disk, so a long session isn't rewritten from scratch every time
     /// one more line arrives -- that would be quadratic on a conversation of any length.
@@ -152,8 +143,8 @@ struct LiveTranslatorView: View {
     private var target: TranslatorLanguage {
         TranslatorLanguage.targets.first { $0.id == targetId } ?? TranslatorLanguage.targets[0]
     }
-    private var translationEngine: TranslatorEngine {
-        TranslatorEngine(rawValue: engineRaw) ?? .hybrid
+    private var model: TranslatorModel {
+        TranslatorModel(rawValue: modelRaw) ?? .gigachat
     }
     private var pace: InterpreterPace {
         InterpreterPace(rawValue: paceRaw) ?? .balanced
@@ -186,43 +177,42 @@ struct LiveTranslatorView: View {
                     .accessibilityLabel("Очистить")
                 }
             }
-            // SwiftUI vends the Apple translation session only through this modifier, so the whole
-            // chunk pump lives inside it regardless of which engine is selected.
-            .translationTask(configuration) { session in
-                do {
-                    // Only Apple's path needs a language pack; preparing unconditionally asked a
-                    // Qwen3 user to download one they will never use.
-                    // Only Apple's path needs a language pack; preparing unconditionally asked
-                    // everyone else to download one they will never use.
-                    if translationEngine == .apple {
-                        try await session.prepareTranslation()
-                    }
-                    for await id in interpreter.pending {
-                        guard let chunk = interpreter.chunk(id) else { continue }
-                        let context = interpreter.chunks.compactMap(\.translated).suffix(3).map { $0 }
+            .sheet(isPresented: $showSettingsSheet) { settingsSheet }
+            // One task for the screen's whole lifetime rather than one per language pair or model
+            // switch -- Apple's TranslationSession needed a session object rebuilt per pair, but
+            // none of the three models here do, so the loop just reads `model` fresh each time
+            // around, which already picks up a mid-conversation switch on the very next chunk.
+            .task {
+                for await id in interpreter.pending {
+                    guard let chunk = interpreter.chunk(id) else { continue }
+                    let context = interpreter.chunks.compactMap(\.translated).suffix(3).map { $0 }
+                    do {
                         let text: String
-                        switch translationEngine {
-                        case .apple:
-                            text = try await session.translate(chunk.original).targetText
-                        case .localLLM:
+                        switch model {
+                        case .qwen:
                             text = try await llm.translate(
                                 chunk.original, from: source.name, to: target.name,
                                 recentContext: context, isFragment: true)
-                        case .hybrid:
+                        case .yandex, .gigachat:
                             text = try await cloud.translate(
-                                chunk.original, from: source.name, to: target.name,
-                                recentContext: context)
+                                chunk.original, service: model.cloudService!,
+                                from: source.name, to: target.name, recentContext: context)
                         }
                         interpreter.complete(id, with: text, language: target.id, speak: speakAloud)
                         persist(force: false)
+                    } catch {
+                        // Per chunk, not around the whole loop: one failed segment (Qwen not
+                        // downloaded, say) used to end the for-await entirely, silently translating
+                        // nothing for the rest of the conversation until the interpreter restarted.
+                        interpreter.errorText = error.localizedDescription
                     }
-                } catch {
-                    interpreter.errorText = error.localizedDescription
                 }
             }
-            .sheet(isPresented: $showEngineSheet) { engineSheet }
-            .task(id: "\(sourceId)-\(targetId)") { await refreshConfiguration() }
             .onChange(of: paceRaw) { _, _ in applyPace() }
+            // Переключение модели посреди разговора — новый шанс для облака, а не продолжение
+            // прежнего разочарования: если предыдущая модель была облачной и подвела, липкий откат
+            // CloudTranslator не должен цепляться за только что выбранную.
+            .onChange(of: modelRaw) { _, _ in CloudTranslator.shared.beginSession() }
             // "включи переводчик" / "выключи переводчик", said without touching the phone.
             .onChange(of: control.startTicket) { _, _ in
                 Task { if !interpreter.isRunning { await interpreter.start(source: source) } }
@@ -235,9 +225,11 @@ struct LiveTranslatorView: View {
             }
             .onAppear { applyPace() }
             // Loading multi-GB weights takes tens of seconds. Doing it now, while the user is still
-            // choosing languages, keeps it off the first chunk of a live conversation.
-            .task(id: engineRaw) {
-                if translationEngine != .apple, llm.isDownloaded, !llm.isModelLoaded {
+            // choosing languages, keeps it off the first chunk of a live conversation -- worth doing
+            // regardless of which model is picked, since Qwen is also the fallback target for the
+            // other two, not just its own separate choice.
+            .task {
+                if llm.isDownloaded, !llm.isModelLoaded {
                     try? await llm.connect()
                 }
             }
@@ -339,7 +331,7 @@ struct LiveTranslatorView: View {
                             .foregroundStyle(.quaternary)
                             .id("inflight")
                     }
-                    if translationEngine == .hybrid, cloud.requestCount > 0 {
+                    if model != .qwen, cloud.requestCount > 0 {
                 StatusLine(kind: .idle, text: "Запросов в облако за сеанс: \(cloud.requestCount)")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -389,6 +381,22 @@ struct LiveTranslatorView: View {
 
     private var controls: some View {
         VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Picker("Модель", selection: $modelRaw) {
+                    ForEach(TranslatorModel.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+
+                Button {
+                    showSettingsSheet = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Настройки перевода")
+            }
+
+            modelStatusLine
+
             Picker("Темп", selection: $paceRaw) {
                 ForEach(InterpreterPace.allCases) { Text($0.label).tag($0.rawValue) }
             }
@@ -399,25 +407,6 @@ struct LiveTranslatorView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                showEngineSheet = true
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: translationEngine == .apple ? "apple.logo" : "cpu")
-                    Text(translationEngine.label)
-                    if translationEngine == .localLLM && !llm.isDownloaded {
-                        Text("— не скачана").foregroundStyle(.orange)
-                    } else if translationEngine == .localLLM && llm.isLoadingModel {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
-                }
-                .font(.subheadline)
-            }
-            .buttonStyle(.plain)
 
             Toggle(isOn: $speakAloud) {
                 Label("Читать вслух", systemImage: "ear")
@@ -453,115 +442,106 @@ struct LiveTranslatorView: View {
         .background(.bar)
     }
 
-    // MARK: Engine sheet
+    /// Line right under the model picker: whichever warning is actually relevant to the model
+    /// that's picked right now, and nothing when there's nothing to say. Qwen not downloaded yet
+    /// and "GigaChat has no key, so this is quietly translating on Qwen instead" used to be
+    /// buried in a sheet the user had no reason to open until a translation had already gone
+    /// wrong; both are exactly the kind of thing to see before pressing start, not after.
+    @ViewBuilder
+    private var modelStatusLine: some View {
+        switch model {
+        case .qwen:
+            if !llm.isDownloaded {
+                HStack(spacing: 8) {
+                    Label("Модель не скачана", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    if isDownloadingModel {
+                        ProgressView(value: llm.downloadProgress).frame(width: 60)
+                    } else {
+                        Button("Скачать \(llm.tier.sizeText)") { downloadModel() }
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+            } else if llm.isLoadingModel {
+                Label("Загружаю модель…", systemImage: "hourglass")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .yandex, .gigachat:
+            if let service = model.cloudService, !service.isConfigured {
+                Label("Ключ \(service.label) не задан в Настройках — переводит Qwen",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if let reason = cloud.lastFallbackReason {
+                // Silent fallback is the right behaviour mid-conversation, but the user still
+                // deserves to find out why the quality changed for the rest of this session.
+                Label("Облако подвело, дальше на Qwen: \(reason)", systemImage: "arrow.uturn.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
 
-    /// Engine picker plus the download the local model needs. It lives here rather than in Settings
-    /// because it is only ever relevant while standing on this screen judging the translation.
-    private var engineSheet: some View {
+    private func downloadModel() {
+        isDownloadingModel = true
+        Task {
+            do { try await llm.download { _ in } }
+            catch { interpreter.errorText = error.localizedDescription }
+            isDownloadingModel = false
+        }
+    }
+
+    // MARK: Settings sheet
+
+    /// What's left once model choice moved to the main screen: Qwen's size tier (relevant no
+    /// matter which of the three is picked, since Qwen is also what the other two fall back to)
+    /// and where the audio is actually going.
+    private var settingsSheet: some View {
         NavigationStack {
             Form {
                 Section {
-                    ForEach(TranslatorEngine.allCases) { option in
+                    ForEach(TranslatorModelTier.allCases) { tier in
                         Button {
-                            engineRaw = option.rawValue
+                            llm.tier = tier
                         } label: {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: option == translationEngine
-                                      ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(option == translationEngine ? Color.accentColor : .secondary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.label).foregroundStyle(.primary)
-                                    Text(option.blurb).font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                Text("\(tier.label) · \(tier.sizeText)")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if llm.tier == tier {
+                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
                                 }
                             }
+                        }
+                    }
+
+                    if llm.isDownloaded {
+                        Label("Скачана", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Button("Удалить с телефона", role: .destructive) {
+                            Task { _ = await llm.deleteDownloadedModel() }
+                        }
+                    } else if isDownloadingModel {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: llm.downloadProgress)
+                            Text(llm.isFinalizing
+                                 ? "Распаковываю…"
+                                 : "Downloading \(Int(llm.downloadProgress * 100))%")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button { downloadModel() } label: {
+                            Label("Скачать \(llm.tier.sizeText)", systemImage: "arrow.down.circle")
                         }
                     }
                 } header: {
-                    Text("Чем переводить")
-                }
-
-                if translationEngine == .hybrid {
-                    Section {
-                        Picker("Сервис", selection: Binding(get: { cloud.service },
-                                                             set: { cloud.service = $0 })) {
-                            ForEach(CloudTranslator.Service.allCases) { option in
-                                Text(option.label).tag(option)
-                            }
-                        }
-                        if !cloud.service.isConfigured {
-                            Label("Ключ не задан — переводить будет Qwen3",
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                        if let reason = cloud.lastFallbackReason {
-                            // Silent fallback is the right behaviour mid-conversation, but the user
-                            // still deserves to find out why the quality changed.
-                            Label("Последний откат: \(reason)", systemImage: "arrow.uturn.down")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } header: {
-                        Text("Облачный сервис")
-                    } footer: {
-                        Text("Ключи — в Настройках, раздел «Модель». Выбранный сервис переводит, "
-                             + "пока доступен; любой сбой молча переключает на модель ниже, не "
-                             + "прерывая разговор.")
-                    }
-                }
-
-                if translationEngine != .apple {
-                    Section {
-                        ForEach(TranslatorModelTier.allCases) { tier in
-                            Button {
-                                llm.tier = tier
-                            } label: {
-                                HStack {
-                                    Text("\(tier.label) · \(tier.sizeText)")
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                    if llm.tier == tier {
-                                        Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                            }
-                        }
-
-                        if llm.isDownloaded {
-                            Label("Скачана", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Button("Удалить с телефона", role: .destructive) {
-                                Task { _ = await llm.deleteDownloadedModel() }
-                            }
-                        } else if isDownloadingModel {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ProgressView(value: llm.downloadProgress)
-                                Text(llm.isFinalizing
-                                     ? "Распаковываю…"
-                                     : "Downloading \(Int(llm.downloadProgress * 100))%")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        } else {
-                            Button {
-                                isDownloadingModel = true
-                                Task {
-                                    do { try await llm.download { _ in } }
-                                    catch { interpreter.errorText = error.localizedDescription }
-                                    isDownloadingModel = false
-                                }
-                            } label: {
-                                Label("Скачать \(llm.tier.sizeText)", systemImage: "arrow.down.circle")
-                            }
-                        }
-                    } header: {
-                        Text(translationEngine == .hybrid ? "Offline fallback model" : "On-device model")
-                    } footer: {
-                        Text(translationEngine == .hybrid
-                             ? "Используется, когда облако недоступно. Без неё потеря сети означает "
-                               + "потерю перевода целиком."
-                             : "Скачивается один раз по Wi-Fi, дальше работает без сети вообще. "
-                               + "Модель побольше переводит лучше, поменьше — отвечает быстрее.")
-                    }
+                    Text("Модель Qwen")
+                } footer: {
+                    Text("Скачивается один раз по Wi-Fi, дальше работает без сети вообще — и как "
+                         + "свой собственный выбор, и как то, на что откатываются Yandex и GigaChat "
+                         + "при сбое. Модель побольше переводит лучше, поменьше — отвечает быстрее.")
                 }
 
                 Section {
@@ -579,31 +559,13 @@ struct LiveTranslatorView: View {
                          + "обратно, поэтому гарнитуру лучше надеть.")
                 }
             }
-            .navigationTitle("Движок перевода")
+            .navigationTitle("Настройки перевода")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Готово") { showEngineSheet = false }
+                    Button("Готово") { showSettingsSheet = false }
                 }
             }
         }
-    }
-
-    /// Rebuilds the Apple translation configuration when either language changes; building it is
-    /// also what prompts for the language pack the first time a pair is used.
-    private func refreshConfiguration() async {
-        let status = await LanguageAvailability().status(from: source.translationLanguage,
-                                                         to: target.translationLanguage)
-        if status == .unsupported, translationEngine == .apple {
-            interpreter.errorText = "\(source.name) → \(target.name) isn't a pair Apple Translate "
-                + "handles. Switch the translator to Qwen3 below."
-            configuration = nil
-            return
-        }
-        interpreter.errorText = nil
-        configuration = TranslationSession.Configuration(
-            source: source.translationLanguage,
-            target: target.translationLanguage
-        )
     }
 }

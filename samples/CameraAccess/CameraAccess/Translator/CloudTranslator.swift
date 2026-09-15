@@ -44,11 +44,6 @@ final class CloudTranslator: ObservableObject {
         lastFallbackReason = nil
     }
 
-    /// Which hosted service translates. GigaChat and YandexGPT are the two the app is configured
-    /// for; the local model is not a cloud option, so selecting it in the chat does not drag the
-    /// translator along with it.
-    static let serviceKey = "translatorCloudService"
-
     enum Service: String, CaseIterable, Identifiable {
         case gigachat
         case yandexgpt
@@ -67,27 +62,18 @@ final class CloudTranslator: ObservableObject {
         }
     }
 
-    var service: Service {
-        get {
-            if let raw = UserDefaults.standard.string(forKey: Self.serviceKey),
-               let stored = Service(rawValue: raw) {
-                return stored
-            }
-            // First run: whichever the user has actually set up, rather than a fixed default that
-            // fails on its first request.
-            return Service.allCases.first(where: \.isConfigured) ?? .gigachat
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.serviceKey) }
-    }
-
     func resetCounter() { requestCount = 0 }
 
-    /// Translate one segment, falling back to the on-device model on any failure.
+    /// Translate one segment through `service`, falling back to the on-device model on any
+    /// failure. Which service to use is the caller's call (LiveTranslatorView's model picker) --
+    /// this used to read its own persisted `service` property instead, which meant the choice
+    /// lived in two places (an engine picker plus a service picker nested inside it) that had to
+    /// be kept in sync for no reason once the screen collapsed to a single three-way picker.
     func translate(_ text: String,
+                   service: Service,
                    from sourceName: String,
                    to targetName: String,
                    recentContext: [String]) async throws -> String {
-        let service = self.service
         if !stickyFallback, service.isConfigured {
             requestCount += 1
             do {

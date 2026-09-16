@@ -330,26 +330,37 @@ final class AudioCaptureHub: ObservableObject {
             return .apple(resolved)
         }
 
-        let transcriber = SpeechTranscriber(locale: resolved, preset: .progressiveTranscription)
-        // nil здесь означает «уже установлена между проверками выше и этой строкой», а не ошибку.
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            isPreparingModel = true
-            defer { isPreparingModel = false }
-            try await request.downloadAndInstall()
-        }
-
-        // На форуме Apple разработчики (подтверждено их же сотрудником) сообщают, что
-        // supportedLocale() иногда называет язык поддерживаемым, а установка после этого тихо
-        // проваливается — install-заявка зависает в "Not Installing", и downloadAndInstall() не
-        // бросает исключение. Проверяем итог явно вместо того, чтобы принять слово Apple на веру,
-        // и откатываемся на Whisper, а не бросаем ошибку — то же самое "недоступно по неизвестной
-        // причине", что и нерезолвящаяся локаль выше.
-        let installed = await SpeechTranscriber.installedLocales
-        guard installed.contains(where: { $0.identifier == resolved.identifier }) else {
+        // Everything from here on is wrapped in one do/catch on purpose: downloadAndInstall() can
+        // fail two different ways, and both need to land on Whisper the same way. The one this was
+        // actually hit by first: it throws directly with its own "asset unavailable after
+        // attempted download, final state: Not Installing" error -- and that throw was escaping
+        // this whole function before the fix, skipping the fallback below entirely, because it
+        // came from a plain `try await` with nothing catching it. The other, documented on Apple's
+        // own developer forum by an Apple employee: supportedLocale() calls the language
+        // supported, installation quietly stays stuck in "Not Installing", and
+        // downloadAndInstall() returns normally anyway with nothing installed -- which the
+        // `installed.contains(...)` check below exists to catch. Only one of the two showed up in
+        // testing so far; both are "no path to Apple for this locale on this device," so both take
+        // the same fallback.
+        do {
+            let transcriber = SpeechTranscriber(locale: resolved, preset: .progressiveTranscription)
+            // nil здесь означает «уже установлена между проверками выше и этой строкой», а не ошибку.
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                isPreparingModel = true
+                defer { isPreparingModel = false }
+                try await request.downloadAndInstall()
+            }
+            let installed = await SpeechTranscriber.installedLocales
+            guard installed.contains(where: { $0.identifier == resolved.identifier }) else {
+                throw HubError.assetNotInstalled(resolved.identifier)
+            }
+            return .apple(resolved)
+        } catch {
+            NSLog("[VisionClaw] Apple-путь для %@ недоступен (%@), перехожу на Whisper",
+                  resolved.identifier, "\(error)")
             try await ensureWhisperModel()
             return .whisper(locale)
         }
-        return .apple(resolved)
     }
 
     private static let whisperModelFileName = "ggml-small.bin"

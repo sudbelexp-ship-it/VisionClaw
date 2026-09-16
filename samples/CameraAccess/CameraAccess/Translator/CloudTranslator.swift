@@ -125,18 +125,19 @@ final class CloudTranslator: ObservableObject {
         // so a slow or hanging network call just sat there for however long URLSession's own
         // default timeout is (a minute or more), and the interpreter looked completely dead for
         // the whole time rather than falling back the way the comment claimed it did.
-        return try await withThrowingTaskGroup(of: String.self) { group in
+        let rawAnswer = try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask {
-                let answer: String
+                // No call out to LocalLLMTranslator.cleaned here -- that's a @MainActor-isolated
+                // static method, and this closure runs as a detached child task that does NOT
+                // inherit the enclosing @MainActor's isolation just because CloudTranslator itself
+                // is @MainActor. Cleaning happens below, back in this method's own actor context,
+                // once the race between the two child tasks has already resolved.
                 switch service {
                 case .gigachat:
-                    answer = try await GigaChatService.shared.ask(text: promptToSend, imageData: nil, history: [])
+                    return try await GigaChatService.shared.ask(text: promptToSend, imageData: nil, history: [])
                 case .yandexgpt:
-                    answer = try await YandexGPTService.shared.ask(text: promptToSend, imageData: nil, history: [])
+                    return try await YandexGPTService.shared.ask(text: promptToSend, imageData: nil, history: [])
                 }
-                let cleaned = LocalLLMTranslator.cleaned(answer)
-                guard !cleaned.isEmpty else { throw CloudTranslatorError.emptyReply }
-                return cleaned
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: Self.cloudTimeout)
@@ -148,6 +149,9 @@ final class CloudTranslator: ObservableObject {
             group.cancelAll()
             return result
         }
+        let cleaned = LocalLLMTranslator.cleaned(rawAnswer)
+        guard !cleaned.isEmpty else { throw CloudTranslatorError.emptyReply }
+        return cleaned
     }
 
     enum CloudTranslatorError: LocalizedError {
